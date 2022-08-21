@@ -1,0 +1,47 @@
+error[E0277]: the trait bound `i32: Type<MariaDB>` is not satisfied
+ --> tests/ui/unknown_database.rs:6:10
+  |
+6 | #[derive(SQLInsert, Clone, Debug)]
+  |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `i32`
+  |
+  = help: the following implementations were found:
+            <i32 as Type<Postgres>>
+  = help: see issue #48214
+  = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `String: Type<MariaDB>` is not satisfied
+ --> tests/ui/unknown_database.rs:6:10
+  |
+6 | #[derive(SQLInsert, Clone, Debug)]
+  |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `String`
+  |
+  = help: the following implementations were found:
+            <String as Type<Postgres>>
+  = help: see issue #48214
+  = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `MariaDB: sqlx::Database` is not satisfied
+ --> tests/ui/unknown_database.rs:6:10
+  |
+6 | #[derive(SQLInsert, Clone, Debug)]
+  |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
+  |
+note: required by a bound in `SQLInsert`
+ --> src/lib.rs
+  |
+  | pub trait SQLInsert<DB: sqlx::Database> {
+  |                         ^^^^^^^^^^^^^^ required by this bound in `SQLInsert`
+  = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `MariaDB: sqlx::Database` is not satisfied
+  --> tests/ui/unknown_database.rs:6:10
+   |
+6  | #[derive(SQLInsert, Clone, Debug)]
+   |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
+   |
+note: required by a bound in `Encode`
+  --> $CARGO/sqlx-core-0.5.10/src/encode.rs
+   |
+   | pub trait Encode<'q, DB: Database> {
+   |                          ^^^^^^^^ required by this bound in `Encode`
+   = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)

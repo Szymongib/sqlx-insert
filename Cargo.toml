@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "sqlx_insert",
+    "sqlx_insert_derive",
+    "tests"
+]

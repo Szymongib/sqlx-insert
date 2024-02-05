@@ -4,19 +4,21 @@ error[E0277]: the trait bound `i32: Type<MariaDB>` is not satisfied
 6 | #[derive(SQLInsert, Clone, Debug)]
   |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `i32`
   |
-  = help: the following implementations were found:
+  = help: the following other types implement trait `Type<DB>`:
             <i32 as Type<Postgres>>
+            <i32 as Type<sqlx::Any>>
   = help: see issue #48214
   = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `String: Type<MariaDB>` is not satisfied
+error[E0277]: the trait bound `std::string::String: Type<MariaDB>` is not satisfied
  --> tests/ui/unknown_database.rs:6:10
   |
 6 | #[derive(SQLInsert, Clone, Debug)]
-  |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `String`
+  |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `std::string::String`
   |
-  = help: the following implementations were found:
-            <String as Type<Postgres>>
+  = help: the following other types implement trait `Type<DB>`:
+            <std::string::String as Type<Postgres>>
+            <std::string::String as Type<sqlx::Any>>
   = help: see issue #48214
   = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
 
@@ -26,6 +28,9 @@ error[E0277]: the trait bound `MariaDB: sqlx::Database` is not satisfied
 6 | #[derive(SQLInsert, Clone, Debug)]
   |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
   |
+  = help: the following other types implement trait `sqlx::Database`:
+            Postgres
+            sqlx::Any
 note: required by a bound in `SQLInsert`
  --> src/lib.rs
   |
@@ -34,14 +39,17 @@ note: required by a bound in `SQLInsert`
   = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `MariaDB: sqlx::Database` is not satisfied
-  --> tests/ui/unknown_database.rs:6:10
-   |
-6  | #[derive(SQLInsert, Clone, Debug)]
-   |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
-   |
+ --> tests/ui/unknown_database.rs:6:10
+  |
+6 | #[derive(SQLInsert, Clone, Debug)]
+  |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
+  |
+  = help: the following other types implement trait `sqlx::Database`:
+            Postgres
+            sqlx::Any
 note: required by a bound in `Encode`
-  --> $CARGO/sqlx-core-0.5.10/src/encode.rs
-   |
-   | pub trait Encode<'q, DB: Database> {
-   |                          ^^^^^^^^ required by this bound in `Encode`
-   = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
+ --> $CARGO/sqlx-core-0.7.3/src/encode.rs
+  |
+  | pub trait Encode<'q, DB: Database> {
+  |                          ^^^^^^^^ required by this bound in `Encode`
+  = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)

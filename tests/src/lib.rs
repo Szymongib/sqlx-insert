@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use sqlx::FromRow;
 use sqlx::Postgres;
 use sqlx::Row;
+use sqlx::Sqlite;
 use sqlx_insert::SQLInsert;
 
 #[derive(SQLInsert, Clone, Debug, PartialEq)]
@@ -13,7 +14,7 @@ pub struct Thing {
     amount: i32,
     pear: String,
     #[sqlx_insert(ignore)]
-    ignore_me: String,
+    ignore_me: Option<String>,
     #[sqlx_insert(rename = "param_extra")]
     param: String,
     #[sqlx_insert(ignore)]
@@ -35,7 +36,7 @@ impl<'r> FromRow<'r, sqlx::postgres::PgRow> for Thing {
             name: row.get("name"),
             amount: row.get("amount"),
             pear: row.get("pear"),
-            ignore_me: "".to_string(),
+            ignore_me: row.get("ignore_me"), // It should not be inserted, but it should be fetched.
             param: row.get("param_extra"),
             complex_type: ComplexType::default(),
         })
@@ -47,7 +48,7 @@ impl<'r> FromRow<'r, sqlx::postgres::PgRow> for Thing {
 pub struct GenericThing<T: ToString> {
     id: String,
     text: T,
-    value: Option<u32>,
+    value: Option<i32>,
 }
 
 #[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
@@ -61,13 +62,46 @@ pub struct LifetimeyThing<'l, T: ToString + Sync> {
     some_ref: Option<&'l T>,
 }
 
+// TODO: Support multiple parameters for database attribute?
+#[derive(SQLInsert, Clone, Debug, PartialEq)]
+#[sqlx_insert(table = "thingy")]
+#[sqlx_insert(database(Sqlite))]
+pub struct SqliteThing {
+    id: String,
+    name: String,
+    amount: i32,
+    pear: String,
+    #[sqlx_insert(ignore)]
+    ignore_me: Option<String>,
+    #[sqlx_insert(rename = "param_extra")]
+    param: String,
+    #[sqlx_insert(ignore)]
+    complex_type: ComplexType, // Ignored parameters should not need to satisfy trait bounds.
+}
+
+// Implement custom FromRow due to ignored field.
+impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for SqliteThing {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(SqliteThing {
+            id: row.get("id"),
+            name: row.get("name"),
+            amount: row.get("amount"),
+            pear: row.get("pear"),
+            ignore_me: row.get("ignore_me"), // It should not be inserted, but it should be fetched.
+            param: row.get("param_extra"),
+            complex_type: ComplexType::default(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, Thing};
+    use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, SqliteThing, Thing};
+    use anyhow::Context;
+    use sqlx::migrate::MigrateDatabase;
     use sqlx::postgres::PgPoolOptions;
-    use sqlx::{Pool, Postgres, Row};
+    use sqlx::{Pool, Postgres, Row, Sqlite, SqlitePool};
     use std::collections::HashMap;
-    use uuid;
 
     use testcontainers::{clients, Docker};
 
@@ -86,6 +120,7 @@ create table thingy (
     name TEXT NOT NULL,
     amount INTEGER NOT NULL,
     pear TEXT NOT NULL,
+    ignore_me TEXT NULL,
     param_extra TEXT NOT NULL
 );";
     const CREATE_GENERIC_THING_TABLE_QUERY: &str = r"
@@ -101,8 +136,27 @@ create table lifetimey_thing (
     maybe_text TEXT NULL
 );";
 
+    async fn create_tables<'c, DB: sqlx::Database, E>(connection: E) -> anyhow::Result<()>
+    where
+        E: sqlx::Executor<'c, Database = DB> + Copy,
+    {
+        connection
+            .execute(CREATE_THINGY_TABLE_QUERY)
+            .await
+            .context("failed to setup thing table")?;
+        connection
+            .execute(CREATE_GENERIC_THING_TABLE_QUERY)
+            .await
+            .context("failed to setup generic thing table")?;
+        connection
+            .execute(CREATE_LIFETIMEY_THING_TABLE_QUERY)
+            .await
+            .context("failed to setup lifetimy thing table")?;
+        Ok(())
+    }
+
     #[tokio::test]
-    async fn it_works() {
+    async fn test_postgres() {
         let docker = clients::Cli::default();
 
         let mut envs = HashMap::new();
@@ -118,21 +172,9 @@ create table lifetimey_thing (
             .await
             .expect("failed to create connection pool");
 
-        let cnn = pool.acquire().await.expect("failed to acquire connection");
-        let mut cnn = cnn.detach();
+        create_tables(&pool).await.expect("failed to create tables");
 
-        sqlx::query(CREATE_THINGY_TABLE_QUERY)
-            .execute(&mut cnn)
-            .await
-            .expect("failed to setup table");
-        sqlx::query(CREATE_GENERIC_THING_TABLE_QUERY)
-            .execute(&mut cnn)
-            .await
-            .expect("failed to setup table");
-        sqlx::query(CREATE_LIFETIMEY_THING_TABLE_QUERY)
-            .execute(&mut cnn)
-            .await
-            .expect("failed to setup table");
+        let mut cnn = pool.acquire().await.expect("failed to acquire connection");
 
         // Thing
         let thing = Thing {
@@ -140,22 +182,22 @@ create table lifetimey_thing (
             name: "name".to_string(),
             amount: 10,
             pear: "yas!".to_string(),
-            ignore_me: "ignored".to_string(),
+            ignore_me: Some("ignored".to_string()),
             param: "param_param_param".to_string(),
             complex_type: ComplexType::default(),
         };
 
-        thing.sql_insert(&mut cnn).await.expect("err");
+        thing.sql_insert(cnn.as_mut()).await.expect("failed to insert thing");
 
         let mut fetched_thing: Thing = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
             .bind(&thing.id)
-            .fetch_one(&mut cnn)
+            .fetch_one(cnn.as_mut())
             .await
             .expect("failed to fetch inserted thing");
-        assert_eq!("", fetched_thing.ignore_me); // It was ignored so should be empty
+        assert_eq!(None, fetched_thing.ignore_me); // It was ignored so should be empty
 
         // Manually set ignored field and compare
-        fetched_thing.ignore_me = "ignored".to_string();
+        fetched_thing.ignore_me = Some("ignored".to_string());
         assert_eq!(thing, fetched_thing);
 
         // GenericThing
@@ -173,7 +215,7 @@ create table lifetimey_thing (
         let fetched_gen_thing: GenericThing<String> =
             sqlx::query_as("SELECT * FROM genericthing WHERE ID = $1")
                 .bind(&generic_thing.id)
-                .fetch_one(&mut cnn)
+                .fetch_one(cnn.as_mut())
                 .await
                 .expect("failed to fetch inserted generic thing");
         assert_eq!(fetched_gen_thing, generic_thing);
@@ -188,13 +230,13 @@ create table lifetimey_thing (
         };
 
         lifetimey_thing
-            .sql_insert(&mut cnn)
+            .sql_insert(cnn.as_mut())
             .await
             .expect("failed to insert lifetimey thing");
 
         let row = sqlx::query("SELECT * FROM lifetimey_thing WHERE ID = $1")
             .bind(&lifetimey_thing.id)
-            .fetch_one(&mut cnn)
+            .fetch_one(cnn.as_mut())
             .await
             .expect("failed to fetch inserted lifetimey thing");
         let fetched_lifetimey_thing = LifetimeyThing {
@@ -205,6 +247,66 @@ create table lifetimey_thing (
         };
         assert_eq!(fetched_lifetimey_thing, lifetimey_thing);
 
-        // TODO: test with SQLite/MySQL & Transaction?
+        // Transaction
+        let mut tx = pool.begin().await.expect("failed to start transaction");
+
+        let new_thing = Thing {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "name".to_string(),
+            amount: 10,
+            pear: "yas!".to_string(),
+            ignore_me: None,
+            param: "param_param_param".to_string(),
+            complex_type: ComplexType::default(),
+        };
+        new_thing
+            .sql_insert(&mut *tx)
+            .await
+            .expect("failed to insert as part of tx");
+
+        tx.commit().await.expect("failed to commit tx");
+
+        let fetched_new_thing: Thing = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
+            .bind(&new_thing.id)
+            .fetch_one(cnn.as_mut())
+            .await
+            .expect("failed to fetch inserted thing");
+        assert_eq!(new_thing, fetched_new_thing);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let db_url = format!("{}/test.db", temp_dir.path().display());
+
+        Sqlite::create_database(&db_url)
+            .await
+            .expect("failed to create sqlite database");
+
+        let db = SqlitePool::connect(&db_url).await.unwrap();
+
+        create_tables(&db).await.expect("failed to create tables");
+
+        let mut cnn = db.acquire().await.unwrap();
+
+        // SqliteThing
+        let thing = SqliteThing {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "name".to_string(),
+            amount: 10,
+            pear: "yas!".to_string(),
+            ignore_me: None,
+            param: "param_param_param".to_string(),
+            complex_type: ComplexType::default(),
+        };
+
+        thing.sql_insert(cnn.as_mut()).await.expect("err");
+
+        let fetched_new_thing: SqliteThing = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
+            .bind(&thing.id)
+            .fetch_one(cnn.as_mut())
+            .await
+            .expect("failed to fetch inserted thing");
+        assert_eq!(thing, fetched_new_thing);
     }
 }

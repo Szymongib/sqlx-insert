@@ -7,11 +7,12 @@ edition = "2018"
 
 [dependencies]
 sqlx_insert_derive = { path = "../sqlx_insert_derive" }
-async-trait = "0.1.52"
-sqlx = { version = "0.5.10" }
+async-trait = "0.1.74"
+sqlx = { version = "0.7.3" }
 
 [dev-dependencies]
-tokio = { version = "1.16.1", features = ["full"]}
-sqlx = { version = "0.5.10", features = [ "runtime-tokio-rustls", "postgres" ] }
+tokio = { version = "1.25", features = ["full"]}
+sqlx = { version = "0.7.3", features = [ "runtime-tokio-rustls", "postgres" ] }
+
 trybuild = "1.0.54"
 

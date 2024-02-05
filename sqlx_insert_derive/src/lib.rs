@@ -5,9 +5,8 @@ use quote::__private::ext::RepToTokensExt;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{parse_quote, Lifetime};
 
-// TODO: document those attributes
-// sqlx_insert(ignore)
-// sqlx_insert(rename = "???")
+// TODO: Attribute for "returning"?
+// TODO: Attribute for a custom query finish?
 
 const IGNORE_ATTRIBUTE: &str = "ignore";
 const RENAME_ATTRIBUTE: &str = "rename";
@@ -23,7 +22,7 @@ pub fn sql_insert_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStr
 
     // Build the trait implementation
     expand_derive_sql_insert(&ast)
-        .expect("failed to expand SQLInsert macro") // TODO: what is convention here?
+        .expect("failed to expand SQLInsert macro")
         .into()
 }
 
@@ -137,7 +136,8 @@ fn expand_derive_sql_insert_struct(
         #[async_trait]
         impl #impl_generics SQLInsert<#db_param> for #ident #ty_generics #where_clause {
 
-            async fn sql_insert<'c, E: sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {
+            async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {
+                #[allow(clippy::clone_on_copy)]
                 let query = sqlx::query(
                     #query
                 )
@@ -203,17 +203,16 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
         }
     }
 
-    // TODO: can I do it better?
-    if db_param.is_none() {
+    if let Some(database) = db_param.as_ref() {
+        Ok(ContainerAttributes {
+            table,
+            database: database.clone(),
+        })
+    } else {
         Err(syn::Error::new_spanned(
             "TODO",
             "database parameter not found",
         ))
-    } else {
-        Ok(ContainerAttributes {
-            table,
-            database: db_param.unwrap(),
-        })
     }
 }
 

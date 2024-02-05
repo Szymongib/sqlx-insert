@@ -9,7 +9,9 @@ edition = "2018"
 sqlx_insert = { path = "../sqlx_insert" }
 
 async-trait = "0.1.52"
-sqlx = { version = "0.5.10", features = [ "runtime-tokio-rustls", "macros", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
+sqlx = { version = "^0.7", features = [ "runtime-tokio-rustls", "macros", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
 tokio = { version= "1.15.0", features = [ "full" ]}
 uuid = { version = "0.8.2", features = ["v4"] }
 testcontainers = { version = "0.12" }
+anyhow = "^1"
+tempfile = "^3"

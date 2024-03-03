@@ -187,7 +187,10 @@ create table lifetimey_thing (
             complex_type: ComplexType::default(),
         };
 
-        thing.sql_insert(cnn.as_mut()).await.expect("failed to insert thing");
+        thing
+            .sql_insert(cnn.as_mut())
+            .await
+            .expect("failed to insert thing");
 
         let mut fetched_thing: Thing = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
             .bind(&thing.id)

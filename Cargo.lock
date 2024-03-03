@@ -1448,11 +1448,15 @@ dependencies = [
 name = "sqlx_insert"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "sqlx",
  "sqlx_insert_derive",
+ "tempfile",
+ "testcontainers",
  "tokio",
  "trybuild",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -1539,20 +1543,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.9.9",
-]
-
-[[package]]
-name = "tests"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "sqlx",
- "sqlx_insert",
- "tempfile",
- "testcontainers",
- "tokio",
- "uuid 0.8.2",
 ]
 
 [[package]]

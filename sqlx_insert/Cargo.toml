@@ -12,7 +12,11 @@ sqlx = { version = "0.7.3" }
 
 [dev-dependencies]
 tokio = { version = "1.25", features = ["full"]}
-sqlx = { version = "0.7.3", features = [ "runtime-tokio-rustls", "postgres" ] }
+sqlx = { version = "0.7.3", features = [ "runtime-tokio-rustls", "macros", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
+uuid = { version = "0.8.2", features = ["v4"] }
+testcontainers = { version = "0.12" }
+anyhow = "^1"
+tempfile = "^3"
 
 trybuild = "1.0.54"
 

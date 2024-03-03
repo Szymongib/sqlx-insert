@@ -5,6 +5,7 @@ error[E0277]: the trait bound `i32: Type<MariaDB>` is not satisfied
   |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `i32`
   |
   = help: the following other types implement trait `Type<DB>`:
+            <i32 as Type<Sqlite>>
             <i32 as Type<Postgres>>
             <i32 as Type<sqlx::Any>>
   = help: see issue #48214
@@ -17,6 +18,7 @@ error[E0277]: the trait bound `std::string::String: Type<MariaDB>` is not satisf
   |          ^^^^^^^^^ the trait `Type<MariaDB>` is not implemented for `std::string::String`
   |
   = help: the following other types implement trait `Type<DB>`:
+            <std::string::String as Type<Sqlite>>
             <std::string::String as Type<Postgres>>
             <std::string::String as Type<sqlx::Any>>
   = help: see issue #48214
@@ -29,6 +31,7 @@ error[E0277]: the trait bound `MariaDB: sqlx::Database` is not satisfied
   |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
   |
   = help: the following other types implement trait `sqlx::Database`:
+            Sqlite
             Postgres
             sqlx::Any
 note: required by a bound in `SQLInsert`
@@ -45,6 +48,7 @@ error[E0277]: the trait bound `MariaDB: sqlx::Database` is not satisfied
   |          ^^^^^^^^^ the trait `sqlx::Database` is not implemented for `MariaDB`
   |
   = help: the following other types implement trait `sqlx::Database`:
+            Sqlite
             Postgres
             sqlx::Any
 note: required by a bound in `Encode`

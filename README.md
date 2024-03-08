@@ -7,10 +7,11 @@ This crate provides a proc macro that generates code for inserting structs into 
 ```rust
 use async_trait::async_trait;
 use sqlx::Postgres;
+use sqlx::Sqlite;
 use sqlx_insert::SQLInsert;
 
 #[derive(SQLInsert, Clone, Debug, PartialEq)]
-#[sqlx_insert(database(Postgres))]
+#[sqlx_insert(database(Postgres, Sqlite))]
 pub struct Thing {
     id: String,
     name: String,
@@ -48,14 +49,14 @@ let _ = sqlx::query(
 ### Attributes
 
 `SQLInsert` macro supports the following struct attributes:
-- `database` - type implementing `sqlx::Database` for which insert query is implemented.
+- `database` - list of types implementing `sqlx::Database` for which insert query is implemented.
 - `table` - the name of the table to which generated query inserts.
 
 And field level attributes:
 - `ignore` - ignore field in generated insert query.
 - `rename` - column name for which the field should be inserted.
 
-Examples struct using those:
+Example struct using those:
 ```rust
 #[derive(SQLInsert, Clone, Debug, PartialEq)]
 #[sqlx_insert(table = "thingy")]

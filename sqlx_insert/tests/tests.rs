@@ -7,7 +7,7 @@ use sqlx_insert::SQLInsert;
 
 #[derive(SQLInsert, Clone, Debug, PartialEq)]
 #[sqlx_insert(table = "thingy")]
-#[sqlx_insert(database(Postgres))]
+#[sqlx_insert(database(Postgres, Sqlite))]
 pub struct Thing {
     id: String,
     name: String,
@@ -43,6 +43,20 @@ impl<'r> FromRow<'r, sqlx::postgres::PgRow> for Thing {
     }
 }
 
+impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for Thing {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Thing {
+            id: row.get("id"),
+            name: row.get("name"),
+            amount: row.get("amount"),
+            pear: row.get("pear"),
+            ignore_me: row.get("ignore_me"), // It should not be inserted, but it should be fetched.
+            param: row.get("param_extra"),
+            complex_type: ComplexType::default(),
+        })
+    }
+}
+
 #[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
 #[sqlx_insert(database(Postgres))]
 pub struct GenericThing<T: ToString> {
@@ -62,41 +76,9 @@ pub struct LifetimeyThing<'l, T: ToString + Sync> {
     some_ref: Option<&'l T>,
 }
 
-// TODO: Support multiple parameters for database attribute?
-#[derive(SQLInsert, Clone, Debug, PartialEq)]
-#[sqlx_insert(table = "thingy")]
-#[sqlx_insert(database(Sqlite))]
-pub struct SqliteThing {
-    id: String,
-    name: String,
-    amount: i32,
-    pear: String,
-    #[sqlx_insert(ignore)]
-    ignore_me: Option<String>,
-    #[sqlx_insert(rename = "param_extra")]
-    param: String,
-    #[sqlx_insert(ignore)]
-    complex_type: ComplexType, // Ignored parameters should not need to satisfy trait bounds.
-}
-
-// Implement custom FromRow due to ignored field.
-impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for SqliteThing {
-    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
-        Ok(SqliteThing {
-            id: row.get("id"),
-            name: row.get("name"),
-            amount: row.get("amount"),
-            pear: row.get("pear"),
-            ignore_me: row.get("ignore_me"), // It should not be inserted, but it should be fetched.
-            param: row.get("param_extra"),
-            complex_type: ComplexType::default(),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, SqliteThing, Thing};
+    use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, Thing};
     use anyhow::Context;
     use sqlx::migrate::MigrateDatabase;
     use sqlx::postgres::PgPoolOptions;
@@ -292,8 +274,7 @@ create table lifetimey_thing (
 
         let mut cnn = db.acquire().await.unwrap();
 
-        // SqliteThing
-        let thing = SqliteThing {
+        let thing = Thing {
             id: uuid::Uuid::new_v4().to_string(),
             name: "name".to_string(),
             amount: 10,
@@ -305,7 +286,7 @@ create table lifetimey_thing (
 
         thing.sql_insert(cnn.as_mut()).await.expect("err");
 
-        let fetched_new_thing: SqliteThing = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
+        let fetched_new_thing: Thing = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
             .bind(&thing.id)
             .fetch_one(cnn.as_mut())
             .await

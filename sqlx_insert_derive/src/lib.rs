@@ -1,12 +1,12 @@
 extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
-use quote::__private::ext::RepToTokensExt;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{parse_quote, Lifetime};
 
 // TODO: Attribute for "returning"?
 // TODO: Attribute for a custom query finish?
+// TODO: Support for batch insert?
 
 const IGNORE_ATTRIBUTE: &str = "ignore";
 const RENAME_ATTRIBUTE: &str = "rename";
@@ -51,7 +51,7 @@ fn expand_derive_sql_insert_struct(
 
     let container_attrs =
         parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
-    let db_param = container_attrs.database.0;
+    let db_params = container_attrs.database;
 
     let generics = &input.generics;
 
@@ -86,8 +86,12 @@ fn expand_derive_sql_insert_struct(
 
         predicates.push(parse_quote!(#ty: #lifetime));
         predicates.push(parse_quote!(#ty: Clone + Send + Sync));
-        predicates.push(parse_quote!(#ty: ::sqlx::encode::Encode<#lifetime, #db_param>));
-        predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#db_param>));
+
+        for param in &db_params {
+            let param = &param.0;
+            predicates.push(parse_quote!(#ty: ::sqlx::encode::Encode<#lifetime, #param>));
+            predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#param>));
+        }
     }
 
     let (impl_generics, _, where_clause) = generics.split_for_impl();
@@ -131,29 +135,41 @@ fn expand_derive_sql_insert_struct(
         )
     });
 
-    Ok(quote! {
-        #[automatically_derived]
-        #[async_trait]
-        impl #impl_generics SQLInsert<#db_param> for #ident #ty_generics #where_clause {
+    let mut impls = vec![];
+    for db_param in db_params {
+        let db_param = db_param.0;
+        let bind_extended = bind_extended.clone();
 
-            async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {
-                #[allow(clippy::clone_on_copy)]
-                let query = sqlx::query(
-                    #query
-                )
-                #(#bind_extended)*
-                .execute(connection).await?;
+        let implm = quote! {
+            #[automatically_derived]
+            #[async_trait]
+            impl #impl_generics SQLInsert<#db_param> for #ident #ty_generics #where_clause {
 
-                ::std::result::Result::Ok(())
+                async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {
+                    #[allow(clippy::clone_on_copy)]
+                    let query = sqlx::query(
+                        #query
+                    )
+                    #(#bind_extended)*
+                    .execute(connection).await?;
+
+                    ::std::result::Result::Ok(())
+                }
             }
-        }
-    })
+        };
+        impls.push(implm);
+    }
+    let res = impls.into_iter().fold(TokenStream::new(), |mut acc, x| {
+        acc.extend(x);
+        acc
+    });
+    Ok(res)
 }
 
 #[derive(Clone)]
 struct ContainerAttributes {
     table: Option<String>,
-    database: DBParams,
+    database: Vec<DBParams>,
 }
 
 #[derive(Clone, Debug)]
@@ -168,7 +184,7 @@ impl syn::parse::Parse for DBParams {
 
 fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttributes> {
     let mut table = None;
-    let mut db_param = None;
+    let mut db_param = Vec::new();
 
     for attr in attrs.iter().filter(|a| a.path.is_ident("sqlx_insert")) {
         let meta = attr
@@ -188,10 +204,11 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
                             table = Some(val.value());
                             Ok(())
                         }
-                        syn::Meta::List(path) if path.path.is_ident("database") => {
-                            let db_params: DBParams =
-                                syn::parse2(path.nested.next().unwrap().into_token_stream())?;
-                            db_param = Some(db_params);
+                        syn::Meta::List(meta_list) if meta_list.path.is_ident("database") => {
+                            for value in meta_list.nested.iter() {
+                                let params: DBParams = syn::parse2(value.into_token_stream())?;
+                                db_param.push(params);
+                            }
                             Ok(())
                         }
                         u => Err(syn::Error::new_spanned(u, "unexpected attribute in a list")),
@@ -203,16 +220,16 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
         }
     }
 
-    if let Some(database) = db_param.as_ref() {
+    if db_param.is_empty() {
+        Err(syn::Error::new_spanned(
+            "",
+            "database attribute is required",
+        ))
+    } else {
         Ok(ContainerAttributes {
             table,
-            database: database.clone(),
+            database: db_param,
         })
-    } else {
-        Err(syn::Error::new_spanned(
-            "TODO",
-            "database parameter not found",
-        ))
     }
 }
 

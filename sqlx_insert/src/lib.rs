@@ -20,11 +20,12 @@ use async_trait::async_trait;
 /// ```rust
 /// use async_trait::async_trait;
 /// use sqlx::Postgres;
+/// use sqlx::Sqlite;
 /// use sqlx_insert::SQLInsert;
 ///
 /// #[derive(SQLInsert, Clone, Debug)]
 /// #[sqlx_insert(table = "thingy")]
-/// #[sqlx_insert(database(Postgres))]
+/// #[sqlx_insert(database(Postgres, Sqlite))]
 /// pub struct Thing {
 ///     id: String,
 ///     name: String,
@@ -44,11 +45,12 @@ pub use sqlx_insert_derive::SQLInsert;
 /// ```rust
 /// use async_trait::async_trait;
 /// use sqlx::Postgres;
+/// use sqlx::Sqlite;
 /// use sqlx::PgConnection;
 /// use sqlx_insert::SQLInsert;
 ///
 /// #[derive(SQLInsert, Clone, Debug, PartialEq)]
-/// #[sqlx_insert(database(Postgres))]
+/// #[sqlx_insert(database(Postgres, Sqlite))]
 /// struct MyStruct {
 ///     id: i32,
 ///     name: String,

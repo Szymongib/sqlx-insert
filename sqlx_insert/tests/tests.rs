@@ -3,6 +3,7 @@ use sqlx::Postgres;
 use sqlx::Row;
 use sqlx::Sqlite;
 use sqlx_insert::SQLInsert;
+use sqlx_insert::SqlInsertRet;
 
 #[derive(SQLInsert, Clone, Debug, PartialEq)]
 #[sqlx_insert(table = "thingy")]
@@ -18,6 +19,41 @@ pub struct Thing {
     param: String,
     #[sqlx_insert(ignore)]
     complex_type: ComplexType, // Ignored parameters should not need to satisfy trait bounds.
+}
+
+// Make sure that we can use both on the same struct.
+#[derive(SqlInsertRet, SQLInsert, Clone, PartialEq, Eq, Debug)]
+#[sqlx_insert(table = "thingy")]
+#[sqlx_insert(database(Postgres, Sqlite))]
+pub struct Thing2 {
+    id: String,
+    name: String,
+    amount: i32,
+    pear: String,
+    #[sqlx_insert(ignore)]
+    ignore_me: Option<String>,
+    #[sqlx_insert(rename = "param_extra")]
+    param: String,
+}
+
+impl<'a, R: ::sqlx::Row> ::sqlx::FromRow<'a, R> for Thing2
+where
+    &'a ::std::primitive::str: ::sqlx::ColumnIndex<R>,
+    i32: ::sqlx::decode::Decode<'a, R::Database>,
+    i32: ::sqlx::types::Type<R::Database>,
+    String: ::sqlx::decode::Decode<'a, R::Database>,
+    String: ::sqlx::types::Type<R::Database>,
+{
+    fn from_row(row: &'a R) -> ::sqlx::Result<Self> {
+        Ok(Thing2 {
+            id: row.get("id"),
+            name: row.get("name"),
+            amount: row.get("amount"),
+            pear: row.get("pear"),
+            ignore_me: row.get("ignore_me"), // It should not be inserted, but it should be fetched.
+            param: row.get("param_extra"),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -75,9 +111,19 @@ pub struct LifetimeyThing<'l, T: ToString + Sync> {
     some_ref: Option<&'l T>,
 }
 
+#[derive(SqlInsertRet, Clone, Debug, PartialEq, FromRow)]
+#[sqlx_insert(database(Postgres))]
+pub struct MyStruct {
+    #[sqlx_insert(ignore)]
+    id: i32,
+    name: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, Thing};
+    use crate::{
+        ComplexType, GenericThing, LifetimeyThing, MyStruct, SQLInsert, SqlInsertRet, Thing, Thing2,
+    };
     use anyhow::Context;
     use sqlx::migrate::MigrateDatabase;
     use sqlx::postgres::PgPoolOptions;
@@ -117,6 +163,12 @@ create table lifetimey_thing (
     maybe_text TEXT NULL
 );";
 
+    const CREATE_AUTOGEN_ID_TABLE_QUERY: &str = r"
+create table mystruct (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL
+);";
+
     async fn create_tables<'c, DB: sqlx::Database, E>(connection: E) -> anyhow::Result<()>
     where
         E: sqlx::Executor<'c, Database = DB> + Copy,
@@ -133,6 +185,10 @@ create table lifetimey_thing (
             .execute(CREATE_LIFETIMEY_THING_TABLE_QUERY)
             .await
             .context("failed to setup lifetimy thing table")?;
+        connection
+            .execute(CREATE_AUTOGEN_ID_TABLE_QUERY)
+            .await
+            .context("failed to setup autogen id table")?;
         Ok(())
     }
 
@@ -167,7 +223,6 @@ create table lifetimey_thing (
             param: "param_param_param".to_string(),
             complex_type: ComplexType::default(),
         };
-
         thing
             .sql_insert(cnn.as_mut())
             .await
@@ -256,6 +311,31 @@ create table lifetimey_thing (
             .await
             .expect("failed to fetch inserted thing");
         assert_eq!(new_thing, fetched_new_thing);
+
+        // SqlInsertRet
+        let thing2 = Thing2 {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "name".to_string(),
+            amount: 10,
+            pear: "yas!".to_string(),
+            ignore_me: None,
+            param: "param_param_param".to_string(),
+        };
+        let inserted = thing2
+            .sql_insert_ret(cnn.as_mut())
+            .await
+            .expect("failed to insert thing2");
+        assert_eq!(thing2, inserted);
+
+        let my_struct = MyStruct {
+            id: -1,
+            name: "name".to_string(),
+        };
+        let inserted = my_struct
+            .sql_insert_ret(cnn.as_mut())
+            .await
+            .expect("failed to insert my_struct");
+        assert!(inserted.id != -1);
     }
 
     #[tokio::test]
@@ -291,5 +371,26 @@ create table lifetimey_thing (
             .await
             .expect("failed to fetch inserted thing");
         assert_eq!(thing, fetched_new_thing);
+
+        let thing2 = Thing2 {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "name".to_string(),
+            amount: 10,
+            pear: "yas!".to_string(),
+            ignore_me: None,
+            param: "param_param_param".to_string(),
+        };
+        let returned = thing2
+            .sql_insert_ret(cnn.as_mut())
+            .await
+            .expect("failed to insert thing2");
+        assert_eq!(thing2, returned);
+
+        let fetched_thing2: Thing2 = sqlx::query_as("SELECT * FROM thingy WHERE ID = $1")
+            .bind(&thing2.id)
+            .fetch_one(cnn.as_mut())
+            .await
+            .expect("failed to fetch inserted thing2");
+        assert_eq!(thing2, fetched_thing2);
     }
 }

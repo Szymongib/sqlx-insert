@@ -1,5 +1,7 @@
 extern crate proc_macro;
 
+use std::vec;
+
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{parse_quote, Lifetime};
@@ -7,6 +9,9 @@ use syn::{parse_quote, Lifetime};
 // TODO: Attribute for "returning"?
 // TODO: Attribute for a custom query finish?
 // TODO: Support for batch insert?
+
+// TODO: sql_insert_ret_as
+// And regular version, returning the result like - Result<Vec<DB::Row>, Error>
 
 const IGNORE_ATTRIBUTE: &str = "ignore";
 const RENAME_ATTRIBUTE: &str = "rename";
@@ -68,51 +73,11 @@ fn expand_derive_sql_insert_struct(
         generics.params.insert(0, parse_quote!(#lifetime));
     }
     let predicates = &mut generics.make_where_clause().predicates;
-
     // Check field attributes and filter ignored fields.
-    let fields_with_attr: Vec<(&syn::Field, FieldAttributes)> = fields
-        .into_iter()
-        .map(|f| {
-            let attributes =
-                parse_field_attributes(&f.attrs).expect("Failed to parse fields attribute.");
-            (f, attributes)
-        })
-        .filter(|(_, attr)| !attr.ignore)
-        .collect();
+    let fields_with_attr: Vec<(&syn::Field, FieldAttributes)> = fields_with_attributes(fields);
+    set_fields_types_constraints(predicates, &fields_with_attr, lifetime, &db_params);
 
-    // Set additional sqlx constraints for types.
-    for (field, _) in &fields_with_attr {
-        let ty = &field.ty;
-
-        predicates.push(parse_quote!(#ty: #lifetime));
-        predicates.push(parse_quote!(#ty: Clone + Send + Sync));
-
-        for param in &db_params {
-            let param = &param.0;
-            predicates.push(parse_quote!(#ty: ::sqlx::encode::Encode<#lifetime, #param>));
-            predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#param>));
-        }
-    }
-
-    let (impl_generics, _, where_clause) = generics.split_for_impl();
-
-    let mut names: Vec<String> = Vec::new();
-    for (field, attr) in fields_with_attr.iter() {
-        let id = if let Some(rename) = attr.clone().rename {
-            rename
-        } else {
-            field.ident.as_ref().unwrap().to_string()
-        };
-
-        names.push(id);
-    }
-
-    let vals: Vec<String> = names
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("${}", i + 1))
-        .collect();
-
+    let (field_names, field_binds) = get_fields_for_query(&fields_with_attr);
     let table_name = if let Some(from_attr) = container_attrs.table {
         from_attr
     } else {
@@ -122,9 +87,11 @@ fn expand_derive_sql_insert_struct(
     let query = format!(
         "INSERT INTO {} ({}) VALUES ({})",
         table_name,
-        names.join(", "),
-        vals.join(", ")
+        field_names.join(", "),
+        field_binds.join(", ")
     );
+
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
 
     let bind_extended = fields_with_attr.into_iter().map(|(field, _)| {
         let field_name = field.clone().ident.expect("all fields should be named");
@@ -152,7 +119,6 @@ fn expand_derive_sql_insert_struct(
                     )
                     #(#bind_extended)*
                     .execute(connection).await?;
-
                     ::std::result::Result::Ok(())
                 }
             }
@@ -205,10 +171,7 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
                             Ok(())
                         }
                         syn::Meta::List(meta_list) if meta_list.path.is_ident("database") => {
-                            for value in meta_list.nested.iter() {
-                                let params: DBParams = syn::parse2(value.into_token_stream())?;
-                                db_param.push(params);
-                            }
+                            db_param = parse_db_params(meta_list)?;
                             Ok(())
                         }
                         u => Err(syn::Error::new_spanned(u, "unexpected attribute in a list")),
@@ -231,6 +194,15 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
             database: db_param,
         })
     }
+}
+
+fn parse_db_params(meta_list: &syn::MetaList) -> syn::Result<Vec<DBParams>> {
+    let mut db_params = Vec::new();
+    for value in meta_list.nested.iter() {
+        let params: DBParams = syn::parse2(value.into_token_stream())?;
+        db_params.push(params);
+    }
+    Ok(db_params)
 }
 
 #[derive(Clone)]
@@ -275,6 +247,182 @@ fn parse_field_attributes(attrs: &[syn::Attribute]) -> syn::Result<FieldAttribut
     }
 
     Ok(sqlx_insert_attrs)
+}
+
+fn fields_with_attributes(fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>) -> Vec<(&syn::Field, FieldAttributes)> {
+    fields
+        .into_iter()
+        .map(|f| {
+            let attributes =
+                parse_field_attributes(&f.attrs).expect("Failed to parse fields attribute.");
+            (f, attributes)
+        })
+        .filter(|(_, attr)| !attr.ignore)
+        .collect()
+}
+
+// Set additional sqlx constraints for types.
+fn set_fields_types_constraints(
+    predicates: &mut syn::punctuated::Punctuated<syn::WherePredicate, syn::token::Comma>, 
+    fields_with_attr: &Vec<(&syn::Field, FieldAttributes)>, 
+    lifetime: Lifetime, db_params: &Vec<DBParams>
+) {
+    for (field, _) in fields_with_attr {
+        let ty = &field.ty;
+
+        predicates.push(parse_quote!(#ty: #lifetime));
+        predicates.push(parse_quote!(#ty: Clone + Send + Sync));
+        for param in db_params {
+            let param = &param.0;
+            predicates.push(parse_quote!(#ty: ::sqlx::encode::Encode<#lifetime, #param>));
+            predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#param>));
+        }
+    }
+}
+
+fn get_fields_for_query(
+    fields_with_attr: &Vec<(&syn::Field, FieldAttributes)>,
+) -> (Vec<String>, Vec<String>) {
+    let mut names: Vec<String> = Vec::new();
+    for (field, attr) in fields_with_attr.iter() {
+        let id = if let Some(rename) = attr.clone().rename {
+            rename
+        } else {
+            field.ident.as_ref().unwrap().to_string()
+        };
+
+        names.push(id);
+    }
+
+    let binds: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+
+    (names, binds)
+}
+
+#[proc_macro_derive(SqlInsertRet, attributes(sqlx_insert))]
+pub fn sql_insert_ret_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = TokenStream::from(input);
+
+    let ast = syn::parse2(input).expect("failed to parse macro input");
+
+    // Build the trait implementation
+    expand_derive_sql_insert_ret(&ast)
+        .expect("failed to expand SQLInsert macro")
+        .into()
+}
+
+
+fn expand_derive_sql_insert_ret(input: &syn::DeriveInput) -> syn::Result<TokenStream> {
+    match &input.data {
+        syn::Data::Struct(syn::DataStruct {
+            fields: syn::Fields::Named(syn::FieldsNamed { named, .. }),
+            ..
+        }) => expand_derive_sql_insert_struct_ext(input, named),
+
+        // TODO: support unnamed and unit structs
+        syn::Data::Struct(_) => Err(syn::Error::new_spanned(
+            input,
+            "only named struct fields are supported",
+        )),
+        syn::Data::Enum(_) => Err(syn::Error::new_spanned(input, "enums are not supported")),
+        syn::Data::Union(_) => Err(syn::Error::new_spanned(input, "unions are not supported")),
+    }
+}
+
+fn expand_derive_sql_insert_struct_ext(
+    input: &syn::DeriveInput,
+    fields: &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+) -> syn::Result<TokenStream> {
+    let ident = &input.ident;
+
+    let container_attrs =
+        parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
+    let db_params = container_attrs.database;
+
+    let generics = &input.generics;
+
+    let (lifetime, provided) = generics
+        .lifetimes()
+        .next()
+        .map(|def| (def.lifetime.clone(), false))
+        .unwrap_or_else(|| (Lifetime::new("'a", Span::call_site()), true));
+
+    let (_, ty_generics, _) = generics.split_for_impl();
+    let mut generics = generics.clone();
+
+    if provided {
+        generics.params.insert(0, parse_quote!(#lifetime));
+    }
+    let predicates = &mut generics.make_where_clause().predicates;
+    // Check field attributes and filter ignored fields.
+    let fields_with_attr = fields_with_attributes(fields);
+    set_fields_types_constraints(predicates, &fields_with_attr, lifetime, &db_params);
+
+    let (field_names, field_binds) = get_fields_for_query(&fields_with_attr);
+    let table_name = if let Some(from_attr) = container_attrs.table {
+        from_attr
+    } else {
+        ident.to_string()
+    };
+
+    let query = format!(
+        "INSERT INTO {} ({}) VALUES ({}) RETURNING *", // TODO: support custom returning
+        table_name,
+        field_names.join(", "),
+        field_binds.join(", ")
+    );
+
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+
+    let bind_extended = fields_with_attr.into_iter().map(|(field, _)| {
+        let field_name = field.clone().ident.expect("all fields should be named");
+        let span = field_name.span();
+
+        quote_spanned!( span =>
+            .bind(self.#field_name.clone())
+        )
+    });
+
+    let mut impls = vec![];
+    for db_param in db_params {
+        let db_param = db_param.0;
+        let bind_extended = bind_extended.clone();
+
+        let implm = quote! {
+            #[automatically_derived]
+            #[async_trait::async_trait]
+            impl #impl_generics SqlInsertRet<'a, #db_param> for #ident #ty_generics #where_clause {
+                // TODO: optionally, return parameter could be different and passed
+                // as an attribute to the derive macro - that could be nice for models
+                // separation.
+                type Output = #ident #ty_generics #where_clause;
+    
+                async fn sql_insert_ret<'e, 'c, E>(&self, connection: E) -> ::sqlx::Result<Self::Output> 
+                where
+                    E: 'e + sqlx::Executor<'c, Database = #db_param>,
+                {
+                    #[allow(clippy::clone_on_copy)]
+                    let res = sqlx::query_as(
+                        #query
+                    )
+                    #(#bind_extended)*
+                    .fetch_one(connection).await?;
+    
+                    ::std::result::Result::Ok(res)
+                }
+            }
+        };
+        impls.push(implm);
+    }
+    let res = impls.into_iter().fold(TokenStream::new(), |mut acc, x| {
+        acc.extend(x);
+        acc
+    });
+    Ok(res)
 }
 
 #[cfg(test)]

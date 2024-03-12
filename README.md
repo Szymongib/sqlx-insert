@@ -5,7 +5,6 @@ This crate provides a proc macro that generates code for inserting structs into 
 ## Example
 
 ```rust
-use async_trait::async_trait;
 use sqlx::Postgres;
 use sqlx::Sqlite;
 use sqlx_insert::SQLInsert;

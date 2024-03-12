@@ -142,7 +142,7 @@ fn expand_derive_sql_insert_struct(
 
         let implm = quote! {
             #[automatically_derived]
-            #[async_trait]
+            #[async_trait::async_trait]
             impl #impl_generics SQLInsert<#db_param> for #ident #ty_generics #where_clause {
 
                 async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {

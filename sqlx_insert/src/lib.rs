@@ -18,7 +18,6 @@ use async_trait::async_trait;
 ///
 /// Example:
 /// ```rust
-/// use async_trait::async_trait;
 /// use sqlx::Postgres;
 /// use sqlx::Sqlite;
 /// use sqlx_insert::SQLInsert;
@@ -43,7 +42,6 @@ pub use sqlx_insert_derive::SQLInsert;
 ///
 /// Example:
 /// ```rust
-/// use async_trait::async_trait;
 /// use sqlx::Postgres;
 /// use sqlx::Sqlite;
 /// use sqlx::PgConnection;

@@ -1,5 +1,4 @@
 use sqlx_insert::SQLInsert;
-use async_trait::async_trait;
 use sqlx::Postgres;
 
 #[derive(SQLInsert, Clone, Debug)]

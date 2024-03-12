@@ -1,21 +1,15 @@
 error: proc-macro derive panicked
- --> tests/ui/unsupported_types.rs:5:10
+ --> tests/ui/unsupported_types.rs:4:10
   |
-5 | #[derive(SQLInsert, Clone, Debug)]
+4 | #[derive(SQLInsert, Clone, Debug)]
   |          ^^^^^^^^^
   |
   = help: message: failed to expand SQLInsert macro: Error("enums are not supported")
 
-warning: unused import: `async_trait::async_trait`
+warning: unused import: `sqlx::Postgres`
  --> tests/ui/unsupported_types.rs:2:5
   |
-2 | use async_trait::async_trait;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+2 | use sqlx::Postgres;
+  |     ^^^^^^^^^^^^^^
   |
   = note: `#[warn(unused_imports)]` on by default
-
-warning: unused import: `sqlx::Postgres`
- --> tests/ui/unsupported_types.rs:3:5
-  |
-3 | use sqlx::Postgres;
-  |     ^^^^^^^^^^^^^^

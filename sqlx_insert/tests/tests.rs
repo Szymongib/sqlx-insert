@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use sqlx::FromRow;
 use sqlx::Postgres;
 use sqlx::Row;

@@ -74,7 +74,7 @@ pub struct Thing {
 }
 ```
 
-For detailed examples, see [tests](./tests/src/lib.rs).
+For detailed examples, see [tests](./sqlx_insert/tests/tests.rs).
 
 ## Motivation
 

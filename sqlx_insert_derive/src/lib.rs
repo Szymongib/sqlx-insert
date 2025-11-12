@@ -54,6 +54,13 @@ fn expand_derive_sql_insert_struct(
         parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
     let db_params = container_attrs.database;
 
+    if container_attrs.batch_insert_enabled && db_params.len() != 1 || db_params[0].0 != "Postgres" {
+        return Err(syn::Error::new_spanned(
+            input,
+            "batch_insert only works for postgres for now",
+        ));
+    }
+
     let generics = &input.generics;
 
     let (_, ty_generics, _) = generics.split_for_impl();

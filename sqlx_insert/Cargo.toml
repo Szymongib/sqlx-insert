@@ -10,12 +10,11 @@ description = "Proc macro for generating insert statements for sqlx"
 
 [dependencies]
 sqlx_insert_derive = { path = "../sqlx_insert_derive", version = "0.1.1"}
-async-trait = "0.1.74"
-sqlx = { version = "0.7.3" }
+sqlx = { version = "0.8" }
 
 [dev-dependencies]
 tokio = { version = "1.25", features = ["full"]}
-sqlx = { version = "0.7.3", features = [ "runtime-tokio-rustls", "macros", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.8", features = [ "runtime-tokio-rustls", "macros", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
 uuid = { version = "0.8.2", features = ["v4"] }
 testcontainers = { version = "0.12" }
 anyhow = "^1"
@@ -23,3 +22,5 @@ tempfile = "^3"
 
 trybuild = "1.0.54"
 
+[features]
+use-macros = ["sqlx_insert_derive/use-macros"]

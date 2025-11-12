@@ -1,7 +1,5 @@
 //! SQLInsert trait and derive macro for sqlx.
 
-use async_trait::async_trait;
-
 /// Derive macro for automatically implementing [SQLInsert] trait for a struct.
 /// All struct fields that are supposed to be inserted into the database need to
 /// be: [sqlx::types::Type] + [sqlx::encode::Encode] + [Clone] + [Send] + [Sync].
@@ -59,10 +57,16 @@ pub use sqlx_insert_derive::SQLInsert;
 ///     my_struct.sql_insert(connection).await
 /// }
 ///```
-#[async_trait]
 pub trait SQLInsert<DB: sqlx::Database> {
-    async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
+    fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
         &self,
         connection: E,
-    ) -> ::sqlx::Result<()>;
+    ) -> impl std::future::Future<Output = ::sqlx::Result<()>>;
+}
+
+pub trait SQLInsertVec<DB: sqlx::Database>: Sized {
+    fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
+        data: &[Self],
+        connection: E,
+    ) -> impl std::future::Future<Output = ::sqlx::Result<()>>;
 }

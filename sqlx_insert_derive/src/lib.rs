@@ -1,7 +1,7 @@
 extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{format_ident, quote, quote_spanned, ToTokens};
 use syn::{parse_quote, Lifetime};
 
 // TODO: Attribute for "returning"?
@@ -10,6 +10,7 @@ use syn::{parse_quote, Lifetime};
 
 const IGNORE_ATTRIBUTE: &str = "ignore";
 const RENAME_ATTRIBUTE: &str = "rename";
+const INTO_ATTRIBUTE: &str = "into";
 
 // TODO: How should error be handled?
 
@@ -52,21 +53,13 @@ fn expand_derive_sql_insert_struct(
     let container_attrs =
         parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
     let db_params = container_attrs.database;
+    let pg_only = db_params.len() == 1 && db_params[0].0 == "Postgres";
 
     let generics = &input.generics;
-
-    let (lifetime, provided) = generics
-        .lifetimes()
-        .next()
-        .map(|def| (def.lifetime.clone(), false))
-        .unwrap_or_else(|| (Lifetime::new("'a", Span::call_site()), true));
 
     let (_, ty_generics, _) = generics.split_for_impl();
     let mut generics = generics.clone();
 
-    if provided {
-        generics.params.insert(0, parse_quote!(#lifetime));
-    }
     let predicates = &mut generics.make_where_clause().predicates;
 
     // Check field attributes and filter ignored fields.
@@ -81,23 +74,27 @@ fn expand_derive_sql_insert_struct(
         .collect();
 
     // Set additional sqlx constraints for types.
-    for (field, _) in &fields_with_attr {
+    for (field, attr) in &fields_with_attr {
         let ty = &field.ty;
 
-        predicates.push(parse_quote!(#ty: #lifetime));
         predicates.push(parse_quote!(#ty: Clone + Send + Sync));
 
         for param in &db_params {
             let param = &param.0;
-            predicates.push(parse_quote!(#ty: ::sqlx::encode::Encode<#lifetime, #param>));
-            predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#param>));
+            if let Some(target) = attr.into.as_ref() {
+                predicates.push(parse_quote!(#target: ::sqlx::types::Type<#param>));
+                predicates.push(parse_quote!(#ty: ::std::convert::Into<#target>));
+            } else {
+                predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#param>));
+            }
         }
     }
 
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
     let mut names: Vec<String> = Vec::new();
-    for (field, attr) in fields_with_attr.iter() {
+    let mut pg_types: Vec<String> = Vec::new();
+    for (field, attr) in &fields_with_attr {
         let id = if let Some(rename) = attr.clone().rename {
             rename
         } else {
@@ -105,12 +102,24 @@ fn expand_derive_sql_insert_struct(
         };
 
         names.push(id);
+        let rust_type = if let Some(target) = attr.into.as_ref() {
+            target.to_string()
+        } else {
+            get_rust_type(&field.ty)?
+        };
+        pg_types.push(get_pg_type(&rust_type)?);
     }
 
     let vals: Vec<String> = names
         .iter()
         .enumerate()
         .map(|(i, _)| format!("${}", i + 1))
+        .collect();
+
+    let vec_vals: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("${}::{}[]", i + 1, pg_types[i]))
         .collect();
 
     let table_name = if let Some(from_attr) = container_attrs.table {
@@ -126,37 +135,163 @@ fn expand_derive_sql_insert_struct(
         vals.join(", ")
     );
 
-    let bind_extended = fields_with_attr.into_iter().map(|(field, _)| {
-        let field_name = field.clone().ident.expect("all fields should be named");
+    let query_vec = format!(
+        "INSERT INTO {} ({}) SELECT * FROM UNNEST({})",
+        table_name,
+        names.join(", "),
+        vec_vals.join(", ")
+    );
+
+    let values = fields_with_attr.iter().map(|(field, attrs)| {
+        let field_name = field.ident.as_ref().expect("all fields should be named");
         let span = field_name.span();
 
+        if let Some(target) = attrs.into.as_ref() {
+            quote_spanned!( span =>
+                #target::from(self.#field_name.clone())
+            )
+        } else {
+            quote_spanned!( span =>
+                self.#field_name.clone()
+            )
+        }
+    });
+
+    #[cfg(feature = "use-macros")]
+    let vec_temps = fields_with_attr.iter().map(|(field, attrs)| {
+        let field_name = field.ident.as_ref().expect("all fields should be named");
+        let span = field_name.span();
+        let temp_name = format_ident!("{}_value", field_name);
+
+        if let Some(target) = attrs.into.as_ref(){
+            quote_spanned!( span =>
+                let #temp_name = data.iter().map(|e| #target::from(e.#field_name.clone())).collect::<Vec<_>>();
+            )
+        } else {
+            quote_spanned!( span =>
+                let #temp_name = data.iter().map(|e| e.#field_name.clone()).collect::<Vec<_>>();
+            )
+        }
+    });
+
+    let value_vecs = fields_with_attr.iter().map(|(field, _)| {
+        let field_name = field.ident.as_ref().expect("all fields should be named");
+        let span = field_name.span();
+
+        let as_opt = if is_opt(&field.ty) {
+            quote! { as &[Option<_>]}
+        } else {
+            quote! {}
+        };
+        let temp_name = format_ident!("{}_value", field_name);
+
         quote_spanned!( span =>
-            .bind(self.#field_name.clone())
+            &#temp_name #as_opt
         )
+    });
+
+    #[cfg(not(feature = "use-macros"))]
+    let bind_extended = values.map(|v| {
+        quote! {
+            .bind(#v)
+        }
+    });
+    #[cfg(not(feature = "use-macros"))]
+    let bind_vecs = value_vecs.map(|v| {
+        quote! {
+            .bind(#v)
+        }
+    });
+
+    #[cfg(feature = "use-macros")]
+    let macro_values = values.map(|v| {
+        quote! {
+            , #v
+        }
+    });
+    #[cfg(feature = "use-macros")]
+    let macro_vecs = value_vecs.map(|v| {
+        quote! {
+            , #v
+        }
     });
 
     let mut impls = vec![];
     for db_param in db_params {
         let db_param = db_param.0;
-        let bind_extended = bind_extended.clone();
 
-        let implm = quote! {
+        #[cfg(not(feature = "use-macros"))]
+        let bind_extended = bind_extended.clone();
+        #[cfg(not(feature = "use-macros"))]
+        let bind_vecs = bind_vecs.clone();
+
+        #[cfg(feature = "use-macros")]
+        let macro_values = macro_values.clone();
+        #[cfg(feature = "use-macros")]
+        let macro_vecs = macro_vecs.clone();
+        #[cfg(feature = "use-macros")]
+        let vec_temps = vec_temps.clone();
+
+        #[cfg(feature = "use-macros")]
+        let insert = quote! {
+            let query = sqlx::query!(
+                #query
+                #(#macro_values)*
+            )
+        };
+        #[cfg(not(feature = "use-macros"))]
+        let insert = quote! {
+            let query = sqlx::query(
+                #query
+            )
+            #(#bind_extended)*
+        };
+
+        #[cfg(feature = "use-macros")]
+        let insert_vec = quote! {
+            #(#vec_temps)*
+            let query = sqlx::query!(
+                #query_vec
+                #(#macro_vecs)*
+            )
+        };
+        #[cfg(not(feature = "use-macros"))]
+        let insert_vec = quote! {
+            let query = sqlx::query(
+                #query_vec
+            )
+            #(#bind_vecs)*
+        };
+
+        let mut implm = quote! {
             #[automatically_derived]
-            #[async_trait::async_trait]
             impl #impl_generics SQLInsert<#db_param> for #ident #ty_generics #where_clause {
 
                 async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {
                     #[allow(clippy::clone_on_copy)]
-                    let query = sqlx::query(
-                        #query
-                    )
-                    #(#bind_extended)*
+                    #insert
                     .execute(connection).await?;
 
                     ::std::result::Result::Ok(())
                 }
             }
+
         };
+        if pg_only {
+            implm.extend(quote!{
+                #[automatically_derived]
+                impl #impl_generics sqlx_insert::SQLInsertVec<#db_param> for #ident #ty_generics #where_clause {
+
+                    async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(data: &[Self], connection: E) -> ::sqlx::Result<()> {
+                        #[allow(clippy::clone_on_copy)]
+                        #insert_vec
+                        .execute(connection).await?;
+
+                        ::std::result::Result::Ok(())
+                    }
+                }
+            });
+        }
         impls.push(implm);
     }
     let res = impls.into_iter().fold(TokenStream::new(), |mut acc, x| {
@@ -164,6 +299,52 @@ fn expand_derive_sql_insert_struct(
         acc
     });
     Ok(res)
+}
+
+fn is_opt(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Path(type_path) if type_path.path.segments.last().map_or(false, |seg| seg.ident == "Option"))
+}
+
+fn get_pg_type(ty: &str) -> syn::Result<String> {
+    match ty {
+        "i16" => Ok("SMALLINT".to_string()),
+        "i32" | "u16" => Ok("INTEGER".to_string()),
+        "i64" | "u32" => Ok("BIGINT".to_string()),
+        "u64" => Ok("NUMERIC".to_string()),
+        "f32" => Ok("REAL".to_string()),
+        "f64" => Ok("DOUBLE PRECISION".to_string()),
+        "String" => Ok("TEXT".to_string()),
+        "bool" => Ok("BOOLEAN".to_string()),
+        "Uuid" => Ok("UUID".to_string()),
+        "NaiveDateTime" => Ok("TIMESTAMP".to_string()),
+        "DateTime" => Ok("TIMESTAMPTZ".to_string()),
+        other => Err(syn::Error::new(
+            Span::call_site(),
+            format!("unsupported type for Postgres: {other}"),
+        )),
+    }
+}
+
+fn get_rust_type(ty: &syn::Type) -> syn::Result<String> {
+    match ty {
+        syn::Type::Path(type_path) => {
+            let segment = type_path
+                .path
+                .segments
+                .last()
+                .ok_or_else(|| syn::Error::new_spanned(ty, "invalid type path"))?;
+            if segment.ident.to_string() == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return get_rust_type(inner_ty);
+                    }
+                }
+                return Err(syn::Error::new_spanned(ty, "invalid Option type"));
+            }
+            return Ok(segment.ident.to_string());
+        }
+        _ => Err(syn::Error::new_spanned(ty, "unable to determine type")),
+    }
 }
 
 #[derive(Clone)]
@@ -237,12 +418,14 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
 struct FieldAttributes {
     ignore: bool,
     rename: Option<String>,
+    into: Option<TokenStream>,
 }
 
 fn parse_field_attributes(attrs: &[syn::Attribute]) -> syn::Result<FieldAttributes> {
     let mut sqlx_insert_attrs = FieldAttributes {
         ignore: false,
         rename: None,
+        into: None,
     };
 
     for attr in attrs.iter().filter(|a| a.path.is_ident("sqlx_insert")) {
@@ -260,6 +443,12 @@ fn parse_field_attributes(attrs: &[syn::Attribute]) -> syn::Result<FieldAttribut
                             ..
                         }) if path.is_ident(RENAME_ATTRIBUTE) => {
                             sqlx_insert_attrs.rename = Some(val.value());
+                            Ok(())
+                        }
+                        syn::Meta::List(syn::MetaList { path, nested, .. })
+                            if path.is_ident(INTO_ATTRIBUTE) =>
+                        {
+                            sqlx_insert_attrs.into = Some(nested.into_token_stream());
                             Ok(())
                         }
                         syn::Meta::Path(path) if path.is_ident(IGNORE_ATTRIBUTE) => {

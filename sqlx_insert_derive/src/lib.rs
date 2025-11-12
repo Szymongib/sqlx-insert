@@ -2,7 +2,7 @@ extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned, ToTokens};
-use syn::{parse_quote, Lifetime};
+use syn::parse_quote;
 
 // TODO: Attribute for "returning"?
 // TODO: Attribute for a custom query finish?
@@ -53,7 +53,6 @@ fn expand_derive_sql_insert_struct(
     let container_attrs =
         parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
     let db_params = container_attrs.database;
-    let pg_only = db_params.len() == 1 && db_params[0].0 == "Postgres";
 
     let generics = &input.generics;
 
@@ -102,12 +101,15 @@ fn expand_derive_sql_insert_struct(
         };
 
         names.push(id);
-        let rust_type = if let Some(target) = attr.into.as_ref() {
-            target.to_string()
-        } else {
-            get_rust_type(&field.ty)?
-        };
-        pg_types.push(get_pg_type(&rust_type)?);
+
+        if container_attrs.batch_insert_enabled {
+            let rust_type = if let Some(target) = attr.into.as_ref() {
+                target.to_string()
+            } else {
+                get_rust_type(&field.ty)?
+            };
+            pg_types.push(get_pg_type(&rust_type)?);
+        }
     }
 
     let vals: Vec<String> = names
@@ -116,11 +118,15 @@ fn expand_derive_sql_insert_struct(
         .map(|(i, _)| format!("${}", i + 1))
         .collect();
 
-    let vec_vals: Vec<String> = names
-        .iter()
-        .enumerate()
-        .map(|(i, _)| format!("${}::{}[]", i + 1, pg_types[i]))
-        .collect();
+    let vec_vals: Vec<String> = if container_attrs.batch_insert_enabled {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("${}::{}[]", i + 1, pg_types[i]))
+            .collect()
+    } else {
+        vec![]
+    };
 
     let table_name = if let Some(from_attr) = container_attrs.table {
         from_attr
@@ -174,21 +180,25 @@ fn expand_derive_sql_insert_struct(
         }
     });
 
-    let value_vecs = fields_with_attr.iter().map(|(field, _)| {
-        let field_name = field.ident.as_ref().expect("all fields should be named");
-        let span = field_name.span();
+    let value_vecs = if container_attrs.batch_insert_enabled {
+        Some(fields_with_attr.iter().map(|(field, _)| {
+            let field_name = field.ident.as_ref().expect("all fields should be named");
+            let span = field_name.span();
 
-        let as_opt = if is_opt(&field.ty) {
-            quote! { as &[Option<_>]}
-        } else {
-            quote! {}
-        };
-        let temp_name = format_ident!("{}_value", field_name);
+            let as_opt = if is_opt(&field.ty) {
+                quote! { as &[Option<_>]}
+            } else {
+                quote! {}
+            };
+            let temp_name = format_ident!("{}_value", field_name);
 
-        quote_spanned!( span =>
-            &#temp_name #as_opt
-        )
-    });
+            quote_spanned!( span =>
+                &#temp_name #as_opt
+            )
+        }))
+    } else {
+        None
+    };
 
     #[cfg(not(feature = "use-macros"))]
     let bind_extended = values.map(|v| {
@@ -198,9 +208,11 @@ fn expand_derive_sql_insert_struct(
     });
     #[cfg(not(feature = "use-macros"))]
     let bind_vecs = value_vecs.map(|v| {
-        quote! {
-            .bind(#v)
-        }
+        v.map(|v| {
+            quote! {
+                .bind(#v)
+            }
+        })
     });
 
     #[cfg(feature = "use-macros")]
@@ -211,8 +223,45 @@ fn expand_derive_sql_insert_struct(
     });
     #[cfg(feature = "use-macros")]
     let macro_vecs = value_vecs.map(|v| {
+        v.map(|v| {
+            quote! {
+                , #v
+            }
+        })
+    });
+
+    #[cfg(feature = "use-macros")]
+    let insert = quote! {
+        let query = sqlx::query!(
+            #query
+            #(#macro_values)*
+        )
+    };
+    #[cfg(not(feature = "use-macros"))]
+    let insert = quote! {
+        let query = sqlx::query(
+            #query
+        )
+        #(#bind_extended)*
+    };
+
+    #[cfg(feature = "use-macros")]
+    let insert_vec = macro_vecs.map(|macro_vecs| {
         quote! {
-            , #v
+            #(#vec_temps)*
+            let query = sqlx::query!(
+                #query_vec
+                #(#macro_vecs)*
+            )
+        }
+    });
+    #[cfg(not(feature = "use-macros"))]
+    let insert_vec = bind_vecs.map(|bind_vecs| {
+        quote! {
+            let query = sqlx::query(
+                #query_vec
+            )
+            #(#bind_vecs)*
         }
     });
 
@@ -220,48 +269,8 @@ fn expand_derive_sql_insert_struct(
     for db_param in db_params {
         let db_param = db_param.0;
 
-        #[cfg(not(feature = "use-macros"))]
-        let bind_extended = bind_extended.clone();
-        #[cfg(not(feature = "use-macros"))]
-        let bind_vecs = bind_vecs.clone();
-
-        #[cfg(feature = "use-macros")]
-        let macro_values = macro_values.clone();
-        #[cfg(feature = "use-macros")]
-        let macro_vecs = macro_vecs.clone();
-        #[cfg(feature = "use-macros")]
-        let vec_temps = vec_temps.clone();
-
-        #[cfg(feature = "use-macros")]
-        let insert = quote! {
-            let query = sqlx::query!(
-                #query
-                #(#macro_values)*
-            )
-        };
-        #[cfg(not(feature = "use-macros"))]
-        let insert = quote! {
-            let query = sqlx::query(
-                #query
-            )
-            #(#bind_extended)*
-        };
-
-        #[cfg(feature = "use-macros")]
-        let insert_vec = quote! {
-            #(#vec_temps)*
-            let query = sqlx::query!(
-                #query_vec
-                #(#macro_vecs)*
-            )
-        };
-        #[cfg(not(feature = "use-macros"))]
-        let insert_vec = quote! {
-            let query = sqlx::query(
-                #query_vec
-            )
-            #(#bind_vecs)*
-        };
+        let insert_vec = insert_vec.clone();
+        let insert = insert.clone();
 
         let mut implm = quote! {
             #[automatically_derived]
@@ -277,12 +286,13 @@ fn expand_derive_sql_insert_struct(
             }
 
         };
-        if pg_only {
+        if let Some(insert_vec) = insert_vec {
             implm.extend(quote!{
                 #[automatically_derived]
-                impl #impl_generics sqlx_insert::SQLInsertVec<#db_param> for #ident #ty_generics #where_clause {
+                impl #impl_generics sqlx_insert::BatchInsert<#db_param> for #ident #ty_generics #where_clause {
 
-                    async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(data: &[Self], connection: E) -> ::sqlx::Result<()> {
+
+                    async fn batch_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(data: &[Self], connection: E) -> ::sqlx::Result<()> {
                         #[allow(clippy::clone_on_copy)]
                         #insert_vec
                         .execute(connection).await?;
@@ -351,6 +361,7 @@ fn get_rust_type(ty: &syn::Type) -> syn::Result<String> {
 struct ContainerAttributes {
     table: Option<String>,
     database: Vec<DBParams>,
+    batch_insert_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -366,6 +377,7 @@ impl syn::parse::Parse for DBParams {
 fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttributes> {
     let mut table = None;
     let mut db_param = Vec::new();
+    let mut batch_insert_enabled = false;
 
     for attr in attrs.iter().filter(|a| a.path.is_ident("sqlx_insert")) {
         let meta = attr
@@ -392,6 +404,10 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
                             }
                             Ok(())
                         }
+                        syn::Meta::Path(path) if path.is_ident("batch_insert") => {
+                            batch_insert_enabled = true;
+                            Ok(())
+                        }
                         u => Err(syn::Error::new_spanned(u, "unexpected attribute in a list")),
                     },
 
@@ -410,6 +426,7 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
         Ok(ContainerAttributes {
             table,
             database: db_param,
+            batch_insert_enabled,
         })
     }
 }

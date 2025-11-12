@@ -64,8 +64,8 @@ pub trait SQLInsert<DB: sqlx::Database> {
     ) -> impl std::future::Future<Output = ::sqlx::Result<()>>;
 }
 
-pub trait SQLInsertVec<DB: sqlx::Database>: Sized {
-    fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
+pub trait BatchInsert<DB: sqlx::Database>: Sized {
+    fn batch_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
         data: &[Self],
         connection: E,
     ) -> impl std::future::Future<Output = ::sqlx::Result<()>>;

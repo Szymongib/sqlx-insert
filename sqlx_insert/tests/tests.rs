@@ -58,7 +58,7 @@ impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for Thing {
 
 #[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
 #[sqlx_insert(database(Postgres))]
-pub struct GenericThing<T: ToString> {
+pub struct GenericThing<T: sqlx::Encode<'static, Postgres> + 'static> {
     id: String,
     text: T,
     value: Option<i32>,
@@ -67,7 +67,7 @@ pub struct GenericThing<T: ToString> {
 #[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
 #[sqlx_insert(database(Postgres))]
 #[sqlx_insert(table = "lifetimey_thing")]
-pub struct LifetimeyThing<'l, T: ToString + Sync> {
+pub struct LifetimeyThing<'l, T: sqlx::Encode<'l, Postgres> + Sync> {
     id: T,
     text: T,
     maybe_text: Option<T>,

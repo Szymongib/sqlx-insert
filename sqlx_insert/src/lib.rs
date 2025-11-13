@@ -61,11 +61,11 @@ pub use sqlx_insert_derive::SQLInsert;
 ///     my_struct.sql_insert(connection).await
 /// }
 ///```
-pub trait SQLInsert<DB: sqlx::Database> {
+pub trait SQLInsert<DB: sqlx::Database, R> {
     fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
         &self,
         connection: E,
-    ) -> impl std::future::Future<Output = ::sqlx::Result<()>>;
+    ) -> impl std::future::Future<Output = ::sqlx::Result<R>>;
 }
 
 pub trait BatchInsert<DB: sqlx::Database>: Sized {

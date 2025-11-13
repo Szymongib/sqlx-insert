@@ -2,6 +2,7 @@ extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned, ToTokens};
+use std::fmt::Write;
 use syn::parse_quote;
 
 // TODO: Attribute for "returning"?
@@ -9,6 +10,7 @@ use syn::parse_quote;
 // TODO: Support for batch insert?
 
 const IGNORE_ATTRIBUTE: &str = "ignore";
+const ID_ATTRIBUTE: &str = "id";
 const RENAME_ATTRIBUTE: &str = "rename";
 const INTO_ATTRIBUTE: &str = "into";
 
@@ -54,6 +56,12 @@ fn expand_derive_sql_insert_struct(
         parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
     let db_params = container_attrs.database;
 
+    let (ret_type, ret_field) = if let Some(returning) = container_attrs.returning {
+        (returning.ty, Some(returning.field))
+    } else {
+        (quote! { () }, None)
+    };
+
     #[cfg(feature = "use-macros")]
     if db_params.len() != 1 {
         return Err(syn::Error::new_spanned(
@@ -88,7 +96,6 @@ fn expand_derive_sql_insert_struct(
         .filter(|(_, attr)| !attr.ignore)
         .collect();
 
-    // Set additional sqlx constraints for types.
     for (field, attr) in &fields_with_attr {
         let ty = &field.ty;
         let is_option = is_opt(ty);
@@ -156,12 +163,16 @@ fn expand_derive_sql_insert_struct(
         ident.to_string()
     };
 
-    let query = format!(
+    let mut query = format!(
         "INSERT INTO {} ({}) VALUES ({})",
         table_name,
         names.join(", "),
         vals.join(", ")
     );
+    if let Some(ret_field) = &ret_field {
+        write!(query, " RETURNING {ret_field}")
+            .expect("failed to create query string: write error");
+    }
 
     let query_vec = format!(
         "INSERT INTO {} ({}) SELECT * FROM UNNEST({})",
@@ -277,18 +288,42 @@ fn expand_derive_sql_insert_struct(
     });
 
     #[cfg(feature = "use-macros")]
-    let insert = quote! {
-        let query = sqlx::query!(
-            #query
-            #(#macro_values)*
-        )
+    let insert = if ret_field.is_some() {
+        quote! {
+            sqlx::query_scalar!(
+                #query
+                #(#macro_values)*
+            )
+            .fetch_one(connection).await
+        }
+    } else {
+        quote! {
+            let query = sqlx::query!(
+                #query
+                #(#macro_values)*
+            )
+            .execute(connection).await?;
+            ::std::result::Result::Ok(())
+        }
     };
     #[cfg(not(feature = "use-macros"))]
-    let insert = quote! {
-        let query = sqlx::query(
-            #query
-        )
-        #(#bind_extended)*
+    let insert = if ret_field.is_some() {
+        quote! {
+            sqlx::query_scalar(
+                #query
+            )
+            #(#bind_extended)*
+            .fetch_one(connection).await
+        }
+    } else {
+        quote! {
+            let query = sqlx::query(
+                #query
+            )
+            #(#bind_extended)*
+            .execute(connection).await?;
+            ::std::result::Result::Ok(())
+        }
     };
 
     #[cfg(feature = "use-macros")]
@@ -321,14 +356,11 @@ fn expand_derive_sql_insert_struct(
 
         let mut implm = quote! {
             #[automatically_derived]
-            impl #impl_generics SQLInsert<#db_param> for #ident #ty_generics #where_clause {
+            impl #impl_generics SQLInsert<#db_param, #ret_type> for #ident #ty_generics #where_clause {
 
-                async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<()> {
+                async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<#ret_type> {
                     #[allow(clippy::clone_on_copy)]
                     #insert
-                    .execute(connection).await?;
-
-                    ::std::result::Result::Ok(())
                 }
             }
 
@@ -428,6 +460,13 @@ struct ContainerAttributes {
     table: Option<String>,
     database: Vec<DBParams>,
     batch_insert_enabled: bool,
+    returning: Option<ReturningField>,
+}
+
+#[derive(Clone)]
+struct ReturningField {
+    field: String,
+    ty: TokenStream,
 }
 
 #[derive(Clone, Debug)]
@@ -444,6 +483,7 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
     let mut table = None;
     let mut db_param = Vec::new();
     let mut batch_insert_enabled = false;
+    let mut returning = None;
 
     for attr in attrs.iter().filter(|a| a.path.is_ident("sqlx_insert")) {
         let meta = attr
@@ -470,6 +510,40 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
                             }
                             Ok(())
                         }
+                        syn::Meta::List(meta_list) if meta_list.path.is_ident("returning") => {
+                            let (Some(field_name), Some(field_type)) =
+                                (meta_list.nested.first(), meta_list.nested.iter().nth(1))
+                            else {
+                                return Err(syn::Error::new_spanned(
+                                    meta_list,
+                                    "returning attribute requires a field name and type: e.g. returning(\"id\", i32)",
+                                ));
+                            };
+                            let field_name =
+                                if let syn::NestedMeta::Lit(syn::Lit::Str(lit_str)) = field_name {
+                                    lit_str.value()
+                                } else {
+                                    return Err(syn::Error::new_spanned(
+                                        field_name,
+                                        "expected string literal for field name",
+                                    ));
+                                };
+                            let field_type =
+                                if let syn::NestedMeta::Meta(syn::Meta::Path(path)) = field_type {
+                                    path.into_token_stream()
+                                } else {
+                                    return Err(syn::Error::new_spanned(
+                                        field_type,
+                                        "expected type for returning field",
+                                    ));
+                                };
+                            returning = Some(ReturningField {
+                                field: field_name,
+                                ty: field_type,
+                            });
+
+                            Ok(())
+                        }
                         syn::Meta::Path(path) if path.is_ident("batch_insert") => {
                             batch_insert_enabled = true;
                             Ok(())
@@ -493,6 +567,7 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
             table,
             database: db_param,
             batch_insert_enabled,
+            returning,
         })
     }
 }

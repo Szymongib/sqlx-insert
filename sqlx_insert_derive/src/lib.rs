@@ -54,7 +54,16 @@ fn expand_derive_sql_insert_struct(
         parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
     let db_params = container_attrs.database;
 
-    if container_attrs.batch_insert_enabled && db_params.len() != 1 || db_params[0].0 != "Postgres" {
+    #[cfg(feature = "use-macros")]
+    if db_params.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            input,
+            "macro based implementation only works for a single database",
+        ));
+    }
+
+    if container_attrs.batch_insert_enabled && db_params.len() != 1 || db_params[0].0 != "Postgres"
+    {
         return Err(syn::Error::new_spanned(
             input,
             "batch_insert only works for postgres for now",
@@ -82,6 +91,7 @@ fn expand_derive_sql_insert_struct(
     // Set additional sqlx constraints for types.
     for (field, attr) in &fields_with_attr {
         let ty = &field.ty;
+        let is_option = is_opt(ty);
 
         predicates.push(parse_quote!(#ty: Clone + Send + Sync));
 
@@ -89,7 +99,12 @@ fn expand_derive_sql_insert_struct(
             let param = &param.0;
             if let Some(target) = attr.into.as_ref() {
                 predicates.push(parse_quote!(#target: ::sqlx::types::Type<#param>));
-                predicates.push(parse_quote!(#ty: ::std::convert::Into<#target>));
+                if is_option {
+                    let ty = get_option_inner(ty)?;
+                    predicates.push(parse_quote!(#ty: ::std::convert::Into<#target>));
+                } else {
+                    predicates.push(parse_quote!(#ty: ::std::convert::Into<#target>));
+                }
             } else {
                 predicates.push(parse_quote!(#ty: ::sqlx::types::Type<#param>));
             }
@@ -158,11 +173,20 @@ fn expand_derive_sql_insert_struct(
     let values = fields_with_attr.iter().map(|(field, attrs)| {
         let field_name = field.ident.as_ref().expect("all fields should be named");
         let span = field_name.span();
+        let is_option = is_opt(&field.ty);
 
         if let Some(target) = attrs.into.as_ref() {
-            quote_spanned!( span =>
-                #target::from(self.#field_name.clone())
-            )
+            if is_option {
+                quote_spanned!( span =>
+                    self.#field_name.as_ref().map(|v|
+                        std::convert::Into::<#target>::into(v.clone())
+                    )
+                )
+            } else {
+                quote_spanned!( span =>
+                    std::convert::Into::<#target>::into(self.#field_name.clone())
+                )
+            }
         } else {
             quote_spanned!( span =>
                 self.#field_name.clone()
@@ -170,39 +194,44 @@ fn expand_derive_sql_insert_struct(
         }
     });
 
-    #[cfg(feature = "use-macros")]
-    let vec_temps = fields_with_attr.iter().map(|(field, attrs)| {
-        let field_name = field.ident.as_ref().expect("all fields should be named");
-        let span = field_name.span();
-        let temp_name = format_ident!("{}_value", field_name);
+    let vecs = if container_attrs.batch_insert_enabled {
+        let mut temps = Vec::with_capacity(fields_with_attr.len());
+        let mut vals = Vec::with_capacity(fields_with_attr.len());
 
-        if let Some(target) = attrs.into.as_ref(){
-            quote_spanned!( span =>
-                let #temp_name = data.iter().map(|e| #target::from(e.#field_name.clone())).collect::<Vec<_>>();
-            )
-        } else {
-            quote_spanned!( span =>
-                let #temp_name = data.iter().map(|e| e.#field_name.clone()).collect::<Vec<_>>();
-            )
-        }
-    });
-
-    let value_vecs = if container_attrs.batch_insert_enabled {
-        Some(fields_with_attr.iter().map(|(field, _)| {
+        for (field, attrs) in &fields_with_attr {
             let field_name = field.ident.as_ref().expect("all fields should be named");
             let span = field_name.span();
+            let temp_name = format_ident!("{}_value", field_name);
+            let is_option = is_opt(&field.ty);
 
-            let as_opt = if is_opt(&field.ty) {
+            if let Some(target) = attrs.into.as_ref() {
+                if is_option {
+                    temps.push(quote_spanned!( span =>
+                        let #temp_name = data.iter()
+                            .map(|e| e.#field_name.as_ref().map(|v| std::convert::Into::<#target>::into(v.clone()))).collect::<Vec<_>>();
+                    ));
+                } else {
+                    temps.push(quote_spanned!( span =>
+                        let #temp_name = data.iter()
+                            .map(|e| std::convert::Into::<#target>::into(e.#field_name.clone())).collect::<Vec<_>>();
+                    ));
+                }
+            } else {
+                temps.push(quote_spanned!( span =>
+                    let #temp_name = data.iter().map(|e| e.#field_name.clone()).collect::<Vec<_>>();
+                ));
+            }
+
+            let as_opt = if is_option {
                 quote! { as &[Option<_>]}
             } else {
                 quote! {}
             };
-            let temp_name = format_ident!("{}_value", field_name);
-
-            quote_spanned!( span =>
+            vals.push(quote_spanned!( span =>
                 &#temp_name #as_opt
-            )
-        }))
+            ));
+        }
+        Some((temps, vals))
     } else {
         None
     };
@@ -214,12 +243,17 @@ fn expand_derive_sql_insert_struct(
         }
     });
     #[cfg(not(feature = "use-macros"))]
-    let bind_vecs = value_vecs.map(|v| {
-        v.map(|v| {
-            quote! {
-                .bind(#v)
-            }
-        })
+    let bind_vecs = vecs.map(|(temps, vals)| {
+        (
+            temps,
+            vals.iter()
+                .map(|v| {
+                    quote! {
+                        .bind(#v)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )
     });
 
     #[cfg(feature = "use-macros")]
@@ -229,12 +263,17 @@ fn expand_derive_sql_insert_struct(
         }
     });
     #[cfg(feature = "use-macros")]
-    let macro_vecs = value_vecs.map(|v| {
-        v.map(|v| {
-            quote! {
-                , #v
-            }
-        })
+    let macro_vecs = vecs.map(|(temps, vals)| {
+        (
+            temps,
+            vals.iter()
+                .map(|v| {
+                    quote! {
+                        , #v
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )
     });
 
     #[cfg(feature = "use-macros")]
@@ -253,22 +292,23 @@ fn expand_derive_sql_insert_struct(
     };
 
     #[cfg(feature = "use-macros")]
-    let insert_vec = macro_vecs.map(|macro_vecs| {
+    let insert_vec = macro_vecs.map(|(temps, vals)| {
         quote! {
-            #(#vec_temps)*
+            #(#temps)*
             let query = sqlx::query!(
                 #query_vec
-                #(#macro_vecs)*
+                #(#vals)*
             )
         }
     });
     #[cfg(not(feature = "use-macros"))]
-    let insert_vec = bind_vecs.map(|bind_vecs| {
+    let insert_vec = bind_vecs.map(|(temps, binds)| {
         quote! {
+            #(#temps)*
             let query = sqlx::query(
                 #query_vec
             )
-            #(#bind_vecs)*
+            #(#binds)*
         }
     });
 
@@ -316,6 +356,25 @@ fn expand_derive_sql_insert_struct(
         acc
     });
     Ok(res)
+}
+
+fn get_option_inner(ty: &syn::Type) -> syn::Result<&syn::Type> {
+    if let syn::Type::Path(type_path) = ty {
+        let segment = type_path
+            .path
+            .segments
+            .last()
+            .ok_or_else(|| syn::Error::new_spanned(ty, "invalid type path"))?;
+        if segment.ident.to_string() == "Option" {
+            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                    return Ok(inner_ty);
+                }
+            }
+            return Err(syn::Error::new_spanned(ty, "invalid Option type"));
+        }
+    }
+    Err(syn::Error::new_spanned(ty, "type is not Option"))
 }
 
 fn is_opt(ty: &syn::Type) -> bool {
@@ -458,7 +517,7 @@ fn parse_field_attributes(attrs: &[syn::Attribute]) -> syn::Result<FieldAttribut
             .map_err(|e| syn::Error::new_spanned(attr, e))?;
 
         if let syn::Meta::List(list) = meta {
-            for value in list.nested.iter() {
+            for value in &list.nested {
                 match value {
                     syn::NestedMeta::Meta(meta) => match meta {
                         syn::Meta::NameValue(syn::MetaNameValue {
@@ -482,7 +541,7 @@ fn parse_field_attributes(attrs: &[syn::Attribute]) -> syn::Result<FieldAttribut
                         u => Err(syn::Error::new_spanned(u, "unexpected attribute")),
                     },
                     u => Err(syn::Error::new_spanned(u, "unexpected attribute")),
-                }?
+                }?;
             }
         }
     }

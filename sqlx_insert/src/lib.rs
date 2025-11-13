@@ -20,9 +20,11 @@
 /// use sqlx::Sqlite;
 /// use sqlx_insert::SQLInsert;
 ///
+/// // If using macros feature, only a single database is supported
 /// #[derive(SQLInsert, Clone, Debug)]
 /// #[sqlx_insert(table = "thingy")]
-/// #[sqlx_insert(database(Postgres, Sqlite))]
+/// #[cfg_attr(feature = "use-macros", sqlx_insert(database(Postgres)))]
+/// #[cfg_attr(not(feature = "use-macros"), sqlx_insert(database(Postgres, Sqlite)))]
 /// pub struct Thing {
 ///     id: String,
 ///     name: String,
@@ -45,8 +47,10 @@ pub use sqlx_insert_derive::SQLInsert;
 /// use sqlx::PgConnection;
 /// use sqlx_insert::SQLInsert;
 ///
+/// // If using macros feature, only a single database is supported
 /// #[derive(SQLInsert, Clone, Debug, PartialEq)]
-/// #[sqlx_insert(database(Postgres, Sqlite))]
+/// #[cfg_attr(feature = "use-macros", sqlx_insert(database(Postgres)))]
+/// #[cfg_attr(not(feature = "use-macros"), sqlx_insert(database(Postgres, Sqlite)))]
 /// struct MyStruct {
 ///     id: i32,
 ///     name: String,

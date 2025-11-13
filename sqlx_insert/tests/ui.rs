@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "use-macros"))]
     #[test]
     fn ui() {
         let t = trybuild::TestCases::new();

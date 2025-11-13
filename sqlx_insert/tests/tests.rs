@@ -1,12 +1,14 @@
 use sqlx::FromRow;
 use sqlx::Postgres;
 use sqlx::Row;
+#[cfg(not(feature = "use-macros"))]
 use sqlx::Sqlite;
 use sqlx_insert::SQLInsert;
 
 #[derive(SQLInsert, Clone, Debug, PartialEq)]
 #[sqlx_insert(table = "thingy")]
-#[sqlx_insert(database(Postgres, Sqlite))]
+#[cfg_attr(feature = "use-macros", sqlx_insert(database(Postgres)))]
+#[cfg_attr(not(feature = "use-macros"), sqlx_insert(database(Postgres, Sqlite)))]
 pub struct Thing {
     id: String,
     name: String,
@@ -58,8 +60,9 @@ impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for Thing {
 
 #[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
 #[sqlx_insert(database(Postgres))]
-pub struct GenericThing<T: sqlx::Encode<'static, Postgres> + 'static> {
+pub struct GenericThing<T: Into<String> + 'static> {
     id: String,
+    #[sqlx_insert(into(String))]
     text: T,
     value: Option<i32>,
 }
@@ -67,9 +70,12 @@ pub struct GenericThing<T: sqlx::Encode<'static, Postgres> + 'static> {
 #[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
 #[sqlx_insert(database(Postgres))]
 #[sqlx_insert(table = "lifetimey_thing")]
-pub struct LifetimeyThing<'l, T: sqlx::Encode<'l, Postgres> + Sync> {
+pub struct LifetimeyThing<'l, T: Into<String> + Sync> {
+    #[sqlx_insert(into(String))]
     id: T,
+    #[sqlx_insert(into(String))]
     text: T,
+    #[sqlx_insert(into(String))]
     maybe_text: Option<T>,
     #[sqlx_insert(ignore)]
     some_ref: Option<&'l T>,
@@ -79,9 +85,10 @@ pub struct LifetimeyThing<'l, T: sqlx::Encode<'l, Postgres> + Sync> {
 mod tests {
     use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, Thing};
     use anyhow::Context;
-    use sqlx::migrate::MigrateDatabase;
     use sqlx::postgres::PgPoolOptions;
-    use sqlx::{Pool, Postgres, Row, Sqlite, SqlitePool};
+    #[cfg(not(feature = "use-macros"))]
+    use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
+    use sqlx::{Pool, Postgres, Row};
     use std::collections::HashMap;
 
     use testcontainers::{clients, Docker};
@@ -116,6 +123,11 @@ create table lifetimey_thing (
     text TEXT NOT NULL,
     maybe_text TEXT NULL
 );";
+    const CREATE_MYSTRUCT_TABLE_QUERY: &str = r"
+create table mystruct (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL
+);";
 
     async fn create_tables<'c, DB: sqlx::Database, E>(connection: E) -> anyhow::Result<()>
     where
@@ -133,6 +145,10 @@ create table lifetimey_thing (
             .execute(CREATE_LIFETIMEY_THING_TABLE_QUERY)
             .await
             .context("failed to setup lifetimy thing table")?;
+        connection
+            .execute(CREATE_MYSTRUCT_TABLE_QUERY)
+            .await
+            .context("failed to setup mystruct table")?;
         Ok(())
     }
 
@@ -258,6 +274,7 @@ create table lifetimey_thing (
         assert_eq!(new_thing, fetched_new_thing);
     }
 
+    #[cfg(not(feature = "use-macros"))]
     #[tokio::test]
     async fn test_sqlite() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -291,5 +308,14 @@ create table lifetimey_thing (
             .await
             .expect("failed to fetch inserted thing");
         assert_eq!(thing, fetched_new_thing);
+    }
+
+    // This is only here for sqlx prepare to make the doc test work
+    #[derive(SQLInsert, Clone, Debug, PartialEq)]
+    #[sqlx_insert(database(Postgres))]
+    #[allow(dead_code)]
+    struct MyStruct {
+        id: i32,
+        name: String,
     }
 }

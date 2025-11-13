@@ -81,14 +81,23 @@ pub struct LifetimeyThing<'l, T: Into<String> + Sync> {
     some_ref: Option<&'l T>,
 }
 
+// It is also possible to derive batch_insert
+#[derive(SQLInsert, Clone, Debug, PartialEq, FromRow)]
+#[sqlx_insert(database(Postgres), batch_insert)]
+struct MyStruct {
+    id: i32,
+    name: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{ComplexType, GenericThing, LifetimeyThing, SQLInsert, Thing};
+    use crate::{ComplexType, GenericThing, LifetimeyThing, MyStruct, SQLInsert, Thing};
     use anyhow::Context;
     use sqlx::postgres::PgPoolOptions;
     #[cfg(not(feature = "use-macros"))]
     use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
     use sqlx::{Pool, Postgres, Row};
+    use sqlx_insert::BatchInsert;
     use std::collections::HashMap;
 
     use testcontainers::{clients, Docker};
@@ -272,6 +281,32 @@ create table mystruct (
             .await
             .expect("failed to fetch inserted thing");
         assert_eq!(new_thing, fetched_new_thing);
+
+        // Batch insert
+        let my_structs = vec![
+            MyStruct {
+                id: 1,
+                name: "First".to_string(),
+            },
+            MyStruct {
+                id: 2,
+                name: "Second".to_string(),
+            },
+            MyStruct {
+                id: 3,
+                name: "Third".to_string(),
+            },
+        ];
+
+        MyStruct::batch_insert(&my_structs, cnn.as_mut())
+            .await
+            .expect("failed to batch insert MyStructs");
+        let fetched_my_structs: Vec<MyStruct> =
+            sqlx::query_as("SELECT * FROM mystruct ORDER BY id")
+                .fetch_all(cnn.as_mut())
+                .await
+                .expect("failed to fetch inserted MyStructs");
+        assert_eq!(my_structs, fetched_my_structs);
     }
 
     #[cfg(not(feature = "use-macros"))]
@@ -308,14 +343,5 @@ create table mystruct (
             .await
             .expect("failed to fetch inserted thing");
         assert_eq!(thing, fetched_new_thing);
-    }
-
-    // This is only here for sqlx prepare to make the doc test work
-    #[derive(SQLInsert, Clone, Debug, PartialEq)]
-    #[sqlx_insert(database(Postgres))]
-    #[allow(dead_code)]
-    struct MyStruct {
-        id: i32,
-        name: String,
     }
 }

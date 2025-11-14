@@ -358,8 +358,8 @@ fn expand_derive_sql_insert_struct(
             #[automatically_derived]
             impl #impl_generics SQLInsert<#db_param, #ret_type> for #ident #ty_generics #where_clause {
 
+                #[allow(clippy::clone_on_copy)]
                 async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(&self, connection: E) -> ::sqlx::Result<#ret_type> {
-                    #[allow(clippy::clone_on_copy)]
                     #insert
                 }
             }
@@ -371,8 +371,8 @@ fn expand_derive_sql_insert_struct(
                 impl #impl_generics sqlx_insert::BatchInsert<#db_param> for #ident #ty_generics #where_clause {
 
 
+                    #[allow(clippy::clone_on_copy)]
                     async fn batch_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = #db_param>>(data: &[Self], connection: E) -> ::sqlx::Result<()> {
-                        #[allow(clippy::clone_on_copy)]
                         #insert_vec
                         .execute(connection).await?;
 

@@ -194,7 +194,7 @@ fn create_sqlx_calls(is_returning: bool, query: &str, query_vec: &str, values: Q
     });
 
     #[cfg(feature = "use-macros")]
-    let macro_values = values.single.map(|v| {
+    let macro_values = values.single.iter().map(|v| {
         quote! {
             , #v
         }

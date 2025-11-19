@@ -1,15 +1,15 @@
-//! SQLInsert trait and derive macro for sqlx.
+//! `SQLInsert` trait and derive macro for sqlx.
 
-/// Derive macro for automatically implementing [SQLInsert] trait for a struct.
+/// Derive macro for automatically implementing [`SQLInsert`] trait for a struct.
 /// All struct fields that are supposed to be inserted into the database need to
-/// be: [sqlx::types::Type] + [sqlx::encode::Encode] + [Clone] + [Send] + [Sync].
+/// be: [`sqlx::types::Type`] + [`sqlx::encode::Encode`] + [Clone] + [Send] + [Sync].
 /// As of now, the proc macro supports only named struct fields.
 ///
 /// Fields can be renamed using `#[sqlx_insert(rename = "new_name")]` attribute
 /// or ignored using `#[sqlx_insert(ignore)]`.
 ///
 /// Database is specified by passing type to `#[sqlx_insert(database(DbType))]` attribute.
-/// The `DbType` is a type that implements [sqlx::Database] trait.
+/// The `DbType` is a type that implements [`sqlx::Database`] trait.
 ///
 /// Table name defaults to the type name, but can be overridden using
 /// `#[sqlx_insert(table = "new_name")]` attribute.

@@ -6,7 +6,7 @@ use std::fmt::Write;
 use syn::{parse_macro_input, parse_quote, spanned::Spanned};
 
 // TODO: Attribute for a custom query finish?
-// TODO: Support for batch insert?
+// TODO: Support for batch insert? (done for Postgres)
 
 const IGNORE_ATTRIBUTE: &str = "ignore";
 const RENAME_ATTRIBUTE: &str = "rename";
@@ -47,18 +47,15 @@ fn expand_derive_sql_insert_struct(
 ) -> syn::Result<TokenStream> {
     let ident = &input.ident;
 
-    let container_attrs =
-        parse_container_attributes(&input.attrs).expect("failed to parse container attrs");
-    let db_params = container_attrs.database;
+    let (container_attrs, db_params) = parse_container_attributes(input.span(), &input.attrs)?;
 
-    let (ret_type, ret_field) = if let Some(returning) = container_attrs.returning {
-        (returning.ty, Some(returning.field))
+    let ret_type = if let Some(returning) = &container_attrs.returning {
+        returning.ty.clone()
     } else {
-        (quote! { () }, None)
+        quote! { () }
     };
 
-    #[cfg(feature = "use-macros")]
-    if db_params.len() != 1 {
+    if cfg!(feature = "use-macros") && db_params.len() != 1 {
         return Err(syn::Error::new_spanned(
             input,
             "macro based implementation only works for a single database",
@@ -115,19 +112,7 @@ fn expand_derive_sql_insert_struct(
 
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
-    let is_returning = ret_field.is_some();
-    let (query, query_vec) = create_queries(
-        ident,
-        container_attrs.batch_insert_enabled,
-        container_attrs.update,
-        ret_field,
-        &fields_with_attr,
-        container_attrs.table,
-    )?;
-
-    let values = create_values(container_attrs.batch_insert_enabled, &fields_with_attr);
-
-    let (insert, insert_vec) = create_sqlx_calls(is_returning, &query, &query_vec, values);
+    let (insert, insert_vec) = create_sqlx_calls(ident, container_attrs, &fields_with_attr)?;
 
     let mut impls = vec![];
     for db_param in db_params {
@@ -172,34 +157,47 @@ fn expand_derive_sql_insert_struct(
     Ok(res)
 }
 
-fn create_sqlx_calls(is_returning: bool, query: &str, query_vec: &str, values: QueryValues) -> (TokenStream, Option<TokenStream>) {
-    #[cfg(not(feature = "use-macros"))]
-    let bind_extended = values.single.iter().map(|v| {
-        quote! {
-            .bind(#v)
-        }
-    });
-    #[cfg(not(feature = "use-macros"))]
-    let bind_vecs = values.vecs.map(|(temps, vals)| {
-        (
-            temps,
-            vals.iter()
-                .map(|v| {
-                    quote! {
-                        .bind(#v)
-                    }
-                })
-                .collect::<Vec<_>>(),
-        )
-    });
+fn create_sqlx_calls(
+    ident: &syn::Ident,
+    container_attrs: ContainerAttributes,
+    fields_with_attr: &[(&syn::Field, FieldAttributes)],
+) -> Result<(TokenStream, Option<TokenStream>), syn::Error> {
+    let is_returning = container_attrs.returning.is_some();
+    let (query, query_vec) = create_queries(
+        ident,
+        container_attrs.batch_insert_enabled,
+        container_attrs.update,
+        container_attrs.returning.map(|r| r.field),
+        fields_with_attr,
+        container_attrs.table,
+    )?;
 
-    #[cfg(feature = "use-macros")]
+    let values = create_values(container_attrs.batch_insert_enabled, fields_with_attr);
+
+    if cfg!(feature = "use-macros") {
+        Ok(create_macro_calls(&query, &query_vec, values, is_returning))
+    } else {
+        Ok(create_non_macro_calls(
+            &query,
+            &query_vec,
+            values,
+            is_returning,
+        ))
+    }
+}
+
+fn create_macro_calls(
+    query: &str,
+    query_vec: &str,
+    values: QueryValues,
+    is_returning: bool,
+) -> (TokenStream, Option<TokenStream>) {
     let macro_values = values.single.iter().map(|v| {
         quote! {
             , #v
         }
     });
-    #[cfg(feature = "use-macros")]
+
     let macro_vecs = values.vecs.map(|(temps, vals)| {
         (
             temps,
@@ -213,7 +211,6 @@ fn create_sqlx_calls(is_returning: bool, query: &str, query_vec: &str, values: Q
         )
     });
 
-    #[cfg(feature = "use-macros")]
     let insert = if is_returning {
         quote! {
             sqlx::query_scalar!(
@@ -232,7 +229,44 @@ fn create_sqlx_calls(is_returning: bool, query: &str, query_vec: &str, values: Q
             ::std::result::Result::Ok(())
         }
     };
-    #[cfg(not(feature = "use-macros"))]
+
+    let insert_vec = macro_vecs.map(|(temps, vals)| {
+        quote! {
+            #(#temps)*
+            let query = sqlx::query!(
+                #query_vec
+                #(#vals)*
+            )
+        }
+    });
+    (insert, insert_vec)
+}
+
+fn create_non_macro_calls(
+    query: &str,
+    query_vec: &str,
+    values: QueryValues,
+    is_returning: bool,
+) -> (TokenStream, Option<TokenStream>) {
+    let bind_extended = values.single.iter().map(|v| {
+        quote! {
+            .bind(#v)
+        }
+    });
+
+    let bind_vecs = values.vecs.map(|(temps, vals)| {
+        (
+            temps,
+            vals.iter()
+                .map(|v| {
+                    quote! {
+                        .bind(#v)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )
+    });
+
     let insert = if is_returning {
         quote! {
             sqlx::query_scalar(
@@ -252,17 +286,6 @@ fn create_sqlx_calls(is_returning: bool, query: &str, query_vec: &str, values: Q
         }
     };
 
-    #[cfg(feature = "use-macros")]
-    let insert_vec = macro_vecs.map(|(temps, vals)| {
-        quote! {
-            #(#temps)*
-            let query = sqlx::query!(
-                #query_vec
-                #(#vals)*
-            )
-        }
-    });
-    #[cfg(not(feature = "use-macros"))]
     let insert_vec = bind_vecs.map(|(temps, binds)| {
         quote! {
             #(#temps)*
@@ -275,34 +298,40 @@ fn create_sqlx_calls(is_returning: bool, query: &str, query_vec: &str, values: Q
     (insert, insert_vec)
 }
 
-struct QueryValues{
+struct QueryValues {
     single: Vec<TokenStream>,
-    vecs: Option<(Vec<TokenStream>, Vec<TokenStream>)>
+    vecs: Option<(Vec<TokenStream>, Vec<TokenStream>)>,
 }
-fn create_values(batch_insert_enabled: bool, fields_with_attr: &[(&syn::Field, FieldAttributes)]) -> QueryValues {
-    let values = fields_with_attr.iter().map(|(field, attrs)| {
-        let field_name = field.ident.as_ref().expect("all fields should be named");
-        let span = field_name.span();
-        let is_option = is_opt(&field.ty);
+fn create_values(
+    batch_insert_enabled: bool,
+    fields_with_attr: &[(&syn::Field, FieldAttributes)],
+) -> QueryValues {
+    let values = fields_with_attr
+        .iter()
+        .map(|(field, attrs)| {
+            let field_name = field.ident.as_ref().expect("all fields should be named");
+            let span = field_name.span();
+            let is_option = is_opt(&field.ty);
 
-        if let Some(target) = attrs.into.as_ref() {
-            if is_option {
-                quote_spanned!( span =>
-                    self.#field_name.as_ref().map(|v|
-                        std::convert::Into::<#target>::into(v.clone())
+            if let Some(target) = attrs.into.as_ref() {
+                if is_option {
+                    quote_spanned!( span =>
+                        self.#field_name.as_ref().map(|v|
+                            std::convert::Into::<#target>::into(v.clone())
+                        )
                     )
-                )
+                } else {
+                    quote_spanned!( span =>
+                        std::convert::Into::<#target>::into(self.#field_name.clone())
+                    )
+                }
             } else {
                 quote_spanned!( span =>
-                    std::convert::Into::<#target>::into(self.#field_name.clone())
+                    self.#field_name.clone()
                 )
             }
-        } else {
-            quote_spanned!( span =>
-                self.#field_name.clone()
-            )
-        }
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
 
     let vecs = if batch_insert_enabled {
         let mut temps = Vec::with_capacity(fields_with_attr.len());
@@ -345,9 +374,9 @@ fn create_values(batch_insert_enabled: bool, fields_with_attr: &[(&syn::Field, F
     } else {
         None
     };
-    QueryValues{
+    QueryValues {
         single: values,
-        vecs
+        vecs,
     }
 }
 
@@ -357,19 +386,19 @@ fn create_queries(
     batch_insert_enabled: bool,
     update: Option<String>,
     ret_field: Option<String>,
-    fields_with_attr: &Vec<(&syn::Field, FieldAttributes)>,
+    fields_with_attr: &[(&syn::Field, FieldAttributes)],
     table: Option<String>,
 ) -> Result<(String, String), syn::Error> {
     let mut names: Vec<String> = Vec::new();
     let mut pg_types: Vec<String> = Vec::new();
     for (field, attr) in fields_with_attr {
-        let id = if let Some(rename) = attr.clone().rename {
+        let name = if let Some(rename) = attr.clone().rename {
             rename
         } else {
             field.ident.as_ref().unwrap().to_string()
         };
 
-        names.push(id);
+        names.push(name);
 
         if batch_insert_enabled {
             let rust_type = if let Some(target) = attr.into.as_ref() {
@@ -497,7 +526,6 @@ fn get_rust_type(ty: &syn::Type) -> syn::Result<String> {
 #[derive(Clone)]
 struct ContainerAttributes {
     table: Option<String>,
-    database: Vec<DBParams>,
     batch_insert_enabled: bool,
     returning: Option<ReturningField>,
     update: Option<String>,
@@ -519,7 +547,10 @@ impl syn::parse::Parse for DBParams {
     }
 }
 
-fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<ContainerAttributes> {
+fn parse_container_attributes(
+    span: Span,
+    attrs: &[syn::Attribute],
+) -> syn::Result<(ContainerAttributes, Vec<DBParams>)> {
     let mut table = None;
     let mut db_param = Vec::new();
     let mut batch_insert_enabled = false;
@@ -527,10 +558,7 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
     let mut update = None;
 
     for attr in attrs.iter().filter(|a| a.path.is_ident("sqlx_insert")) {
-        let meta = attr
-            .parse_meta()
-            .map_err(|e| syn::Error::new_spanned(attr, e))
-            .expect("failed to parse ATTR");
+        let meta = attr.parse_meta()?;
 
         if let syn::Meta::List(list) = meta {
             for value in &list.nested {
@@ -590,34 +618,40 @@ fn parse_container_attributes(attrs: &[syn::Attribute]) -> syn::Result<Container
                                 return Err(syn::Error::new_spanned(
                                     meta_list,
                                     "expected string literal for update clause",
-                                ))
+                                ));
                             }
                         }
                         syn::Meta::Path(path) if path.is_ident("batch_insert") => {
                             batch_insert_enabled = true;
                         }
-                        u => return Err(syn::Error::new_spanned(u, "unexpected attribute in a list")),
+                        u => {
+                            return Err(syn::Error::new_spanned(
+                                u,
+                                "unexpected attribute in a list",
+                            ))
+                        }
                     },
 
-                    u @ syn::NestedMeta::Lit(_) => return Err(syn::Error::new_spanned(u, "unexpected attribute")),
+                    u @ syn::NestedMeta::Lit(_) => {
+                        return Err(syn::Error::new_spanned(u, "unexpected attribute"))
+                    }
                 }
             }
         }
     }
 
     if db_param.is_empty() {
-        Err(syn::Error::new_spanned(
-            "",
-            "database attribute is required",
-        ))
+        Err(syn::Error::new(span, "database attribute is required"))
     } else {
-        Ok(ContainerAttributes {
-            table,
-            database: db_param,
-            batch_insert_enabled,
-            returning,
-            update,
-        })
+        Ok((
+            ContainerAttributes {
+                table,
+                batch_insert_enabled,
+                returning,
+                update,
+            },
+            db_param,
+        ))
     }
 }
 
@@ -664,7 +698,9 @@ fn parse_field_attributes(attrs: &[syn::Attribute]) -> syn::Result<FieldAttribut
                         }
                         u => Err(syn::Error::new_spanned(u, "unexpected attribute")),
                     },
-                    u @ syn::NestedMeta::Lit(_) => Err(syn::Error::new_spanned(u, "unexpected attribute")),
+                    u @ syn::NestedMeta::Lit(_) => {
+                        Err(syn::Error::new_spanned(u, "unexpected attribute"))
+                    }
                 }?;
             }
         }

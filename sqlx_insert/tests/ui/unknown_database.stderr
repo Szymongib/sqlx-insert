@@ -1,7 +1,9 @@
-error: proc-macro derive panicked
- --> tests/ui/unknown_database.rs:4:10
+error: batch_insert only works for postgres for now
+ --> tests/ui/unknown_database.rs:5:1
   |
-4 | #[derive(SQLInsert, Clone, Debug)]
-  |          ^^^^^^^^^
-  |
-  = help: message: failed to expand SQLInsert macro: Error("batch_insert only works for postgres for now")
+5 | / #[sqlx_insert(database(MariaDB))]
+6 | | pub struct Thing {
+7 | |     id: String,
+8 | |     amount: i32,
+9 | | }
+  | |_^

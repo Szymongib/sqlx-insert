@@ -1,7 +1,5 @@
 //! SQLInsert trait and derive macro for sqlx.
 
-use async_trait::async_trait;
-
 /// Derive macro for automatically implementing [SQLInsert] trait for a struct.
 /// All struct fields that are supposed to be inserted into the database need to
 /// be: [sqlx::types::Type] + [sqlx::encode::Encode] + [Clone] + [Send] + [Sync].
@@ -22,9 +20,11 @@ use async_trait::async_trait;
 /// use sqlx::Sqlite;
 /// use sqlx_insert::SQLInsert;
 ///
+/// // If using macros feature, only a single database is supported
 /// #[derive(SQLInsert, Clone, Debug)]
 /// #[sqlx_insert(table = "thingy")]
-/// #[sqlx_insert(database(Postgres, Sqlite))]
+/// #[cfg_attr(feature = "use-macros", sqlx_insert(database(Postgres)))]
+/// #[cfg_attr(not(feature = "use-macros"), sqlx_insert(database(Postgres, Sqlite)))]
 /// pub struct Thing {
 ///     id: String,
 ///     name: String,
@@ -47,8 +47,10 @@ pub use sqlx_insert_derive::SQLInsert;
 /// use sqlx::PgConnection;
 /// use sqlx_insert::SQLInsert;
 ///
+/// // If using macros feature, only a single database is supported
 /// #[derive(SQLInsert, Clone, Debug, PartialEq)]
-/// #[sqlx_insert(database(Postgres, Sqlite))]
+/// #[cfg_attr(feature = "use-macros", sqlx_insert(database(Postgres)))]
+/// #[cfg_attr(not(feature = "use-macros"), sqlx_insert(database(Postgres, Sqlite)))]
 /// struct MyStruct {
 ///     id: i32,
 ///     name: String,
@@ -59,10 +61,16 @@ pub use sqlx_insert_derive::SQLInsert;
 ///     my_struct.sql_insert(connection).await
 /// }
 ///```
-#[async_trait]
-pub trait SQLInsert<DB: sqlx::Database> {
-    async fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
+pub trait SQLInsert<DB: sqlx::Database, R> {
+    fn sql_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
         &self,
         connection: E,
-    ) -> ::sqlx::Result<()>;
+    ) -> impl std::future::Future<Output = ::sqlx::Result<R>>;
+}
+
+pub trait BatchInsert<DB: sqlx::Database>: Sized {
+    fn batch_insert<'e, 'c, E: 'e + sqlx::Executor<'c, Database = DB>>(
+        data: &[Self],
+        connection: E,
+    ) -> impl std::future::Future<Output = ::sqlx::Result<()>>;
 }

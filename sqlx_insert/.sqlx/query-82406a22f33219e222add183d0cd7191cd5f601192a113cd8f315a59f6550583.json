@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO MyStruct (id, name) SELECT * FROM UNNEST($1::INTEGER[], $2::TEXT[])",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "82406a22f33219e222add183d0cd7191cd5f601192a113cd8f315a59f6550583"
+}

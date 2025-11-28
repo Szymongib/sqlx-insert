@@ -78,15 +78,13 @@ fn expand_derive_sql_insert_struct(
     let predicates = &mut generics.make_where_clause().predicates;
 
     // Check field attributes and filter ignored fields.
-    let fields_with_attr: Vec<(&syn::Field, FieldAttributes)> = fields
-        .into_iter()
-        .map(|f| {
-            let attributes =
-                parse_field_attributes(&f.attrs).expect("Failed to parse fields attribute.");
-            (f, attributes)
-        })
-        .filter(|(_, attr)| !attr.ignore)
-        .collect();
+    let mut fields_with_attr = Vec::with_capacity(fields.len());
+    for f in fields {
+        let attributes = parse_field_attributes(&f.attrs)?;
+        if !attributes.ignore {
+            fields_with_attr.push((f, attributes));
+        }
+    }
 
     for (field, attr) in &fields_with_attr {
         let ty = &field.ty;

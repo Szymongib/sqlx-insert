@@ -1,53 +1,43 @@
 error[E0277]: the trait bound `ComplexType: Type<Postgres>` is not satisfied
  --> tests/ui/not_compatible_fields.rs:4:10
   |
- 4 | #[derive(SQLInsert, Clone, Debug)]
-   |          ^^^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `Type<Postgres>` is not implemented for `ComplexType`
-  --> tests/ui/not_compatible_fields.rs:13:1
-   |
-13 | struct ComplexType {
-   | ^^^^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `Type<DB>`:
-             `&T` implements `Type<DB>`
-             `()` implements `Type<Postgres>`
-             `(T1, T2)` implements `Type<Postgres>`
-             `(T1, T2, T3)` implements `Type<Postgres>`
-             `(T1, T2, T3, T4)` implements `Type<Postgres>`
-             `(T1, T2, T3, T4, T5)` implements `Type<Postgres>`
-             `(T1, T2, T3, T4, T5, T6)` implements `Type<Postgres>`
-             `(T1, T2, T3, T4, T5, T6, T7)` implements `Type<Postgres>`
-           and $N others
-   = help: see issue #48214
-   = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
+4 | #[derive(SQLInsert, Clone, Debug)]
+  |          ^^^^^^^^^ the trait `Type<Postgres>` is not implemented for `ComplexType`
+  |
+  = help: the following other types implement trait `Type<DB>`:
+            `&T` implements `Type<DB>`
+            `()` implements `Type<Postgres>`
+            `(T1, T2)` implements `Type<Postgres>`
+            `(T1, T2, T3)` implements `Type<Postgres>`
+            `(T1, T2, T3, T4)` implements `Type<Postgres>`
+            `(T1, T2, T3, T4, T5)` implements `Type<Postgres>`
+            `(T1, T2, T3, T4, T5, T6)` implements `Type<Postgres>`
+            `(T1, T2, T3, T4, T5, T6, T7)` implements `Type<Postgres>`
+          and $N others
+  = help: see issue #48214
+  = note: this error originates in the derive macro `SQLInsert` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error[E0277]: the trait bound `ComplexType: sqlx::Encode<'_, Postgres>` is not satisfied
  --> tests/ui/not_compatible_fields.rs:9:5
   |
- 4 | #[derive(SQLInsert, Clone, Debug)]
-   |          --------- required by a bound introduced by this call
+4 | #[derive(SQLInsert, Clone, Debug)]
+  |          --------- required by a bound introduced by this call
 ...
- 9 |     complex: ComplexType, // Type cannot be inserted and is not ignored
-   |     ^^^^^^^ unsatisfied trait bound
-   |
-help: the trait `sqlx::Encode<'_, Postgres>` is not implemented for `ComplexType`
-  --> tests/ui/not_compatible_fields.rs:13:1
-   |
-13 | struct ComplexType {
-   | ^^^^^^^^^^^^^^^^^^
-   = help: the following other types implement trait `sqlx::Encode<'q, DB>`:
-             `&'a str` implements `sqlx::Encode<'a, sqlx::Any>`
-             `&'q [u8]` implements `sqlx::Encode<'q, Sqlite>`
-             `&'q [u8]` implements `sqlx::Encode<'q, sqlx::Any>`
-             `&'q str` implements `sqlx::Encode<'q, Sqlite>`
-             `&T` implements `sqlx::Encode<'q, DB>`
-             `&[T]` implements `sqlx::Encode<'q, Postgres>`
-             `&[u8]` implements `sqlx::Encode<'_, Postgres>`
-             `&str` implements `sqlx::Encode<'_, Postgres>`
-           and $N others
+9 |     complex: ComplexType, // Type cannot be inserted and is not ignored
+  |     ^^^^^^^ the trait `sqlx::Encode<'_, Postgres>` is not implemented for `ComplexType`
+  |
+  = help: the following other types implement trait `sqlx::Encode<'q, DB>`:
+            `&'a str` implements `sqlx::Encode<'a, sqlx::Any>`
+            `&'q [u8]` implements `sqlx::Encode<'q, Sqlite>`
+            `&'q [u8]` implements `sqlx::Encode<'q, sqlx::Any>`
+            `&'q str` implements `sqlx::Encode<'q, Sqlite>`
+            `&T` implements `sqlx::Encode<'q, DB>`
+            `&[T]` implements `sqlx::Encode<'q, Postgres>`
+            `&[u8]` implements `sqlx::Encode<'_, Postgres>`
+            `&str` implements `sqlx::Encode<'_, Postgres>`
+          and $N others
 note: required by a bound in `Query::<'q, DB, <DB as sqlx::Database>::Arguments<'q>>::bind`
-  --> $CARGO/sqlx-core-0.8.0/src/query.rs
-   |
-   |     pub fn bind<T: 'q + Encode<'q, DB> + Type<DB>>(mut self, value: T) -> Self {
-   |                         ^^^^^^^^^^^^^^ required by this bound in `Query::<'q, DB, <DB as Database>::Arguments<'q>>::bind`
+ --> $CARGO/sqlx-core-0.8.0/src/query.rs
+  |
+  |     pub fn bind<T: 'q + Encode<'q, DB> + Type<DB>>(mut self, value: T) -> Self {
+  |                         ^^^^^^^^^^^^^^ required by this bound in `Query::<'q, DB, <DB as Database>::Arguments<'q>>::bind`

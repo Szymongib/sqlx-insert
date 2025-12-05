@@ -181,6 +181,7 @@ create table returnidstruct (
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn test_postgres() {
         let docker = clients::Cli::default();
 

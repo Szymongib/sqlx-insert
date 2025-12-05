@@ -1,10 +1,11 @@
-error: proc-macro derive panicked
- --> tests/ui/unsupported_types.rs:4:10
+error: enums are not supported
+ --> tests/ui/unsupported_types.rs:5:1
   |
-4 | #[derive(SQLInsert, Clone, Debug)]
-  |          ^^^^^^^^^
-  |
-  = help: message: failed to expand SQLInsert macro: Error("enums are not supported")
+5 | / #[sqlx_insert(database(Postgres))]
+6 | | pub enum Thing{
+7 | |     A, B, C
+8 | | }
+  | |_^
 
 warning: unused import: `sqlx::Postgres`
  --> tests/ui/unsupported_types.rs:2:5
@@ -12,4 +13,4 @@ warning: unused import: `sqlx::Postgres`
 2 | use sqlx::Postgres;
   |     ^^^^^^^^^^^^^^
   |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+  = note: `#[warn(unused_imports)]` on by default

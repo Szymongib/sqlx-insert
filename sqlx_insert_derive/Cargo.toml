@@ -14,7 +14,7 @@ proc-macro = true
 [dependencies]
 syn = { version = "1", features = ["full"]}
 quote = "1"
-proc-macro2 = { version = "1.0.36", default-features = false }
+proc-macro2 = { version = "1", default-features = false }
 
 [features]
 use-macros = []
